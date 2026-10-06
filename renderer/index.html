@@ -77,6 +77,12 @@
           <div id="nus-proposal" class="nus-proposal hidden"></div>
           <div id="ask-answer" class="hero-answer hidden"></div>
         </section>
+        <div id="source-ask" class="source-ask hidden" role="group" aria-label="Where did you hear about Nūs?">
+          <span class="source-ask-question">Where did you hear about Nūs?</span>
+          <div class="source-ask-buttons">
+            <button type="button" class="quiet-button" data-source="instagram">Instagram</button><button type="button" class="quiet-button" data-source="friend">A friend</button><button type="button" class="quiet-button" data-source="reddit">Reddit</button><button type="button" class="quiet-button" data-source="x">X</button><button type="button" class="quiet-button" data-source="youtube">YouTube</button><button type="button" class="quiet-button" data-source="search">Search</button><button type="button" class="quiet-button" data-source="other">Other</button><button type="button" class="text-button" data-source="skipped">Skip</button>
+          </div>
+        </div>
         <div class="today-layout">
           <div class="today-main">
             <section class="dash-card"><div class="section-head"><div><div class="section-kicker">Three moves</div><h2>Start here</h2></div></div><div id="today-list" class="moves-list"></div></section>
@@ -286,6 +292,16 @@
                 </div>
               </div>
               <span id="acq-badge" class="status-badge">Optional</span>
+            </section>
+            <section class="setting-card" id="stats-card">
+              <div>
+                <div class="section-kicker">Usage stats</div>
+                <h3 id="stats-title">Send anonymous usage stats</h3>
+                <p id="stats-copy">Anonymous usage stats (which features get used, on a random install id) help us see what works. Your coursework and what you type stay on your device. Turn it off here.</p>
+                <div class="sync-row"><label class="switch"><input id="stats-toggle" type="checkbox" checked /><span class="slider"></span></label><span id="stats-label">Anonymous usage stats are on</span></div>
+                <div class="sheet-actions"><span id="stats-status"></span></div>
+              </div>
+              <span id="stats-badge" class="status-badge good">On</span>
             </section>
             <section class="setting-card" id="bridge-card"><div><div class="section-kicker">Companion</div><h3 id="bridge-title">Checking shared context…</h3><p id="bridge-copy">The overlay reads a minimal semester snapshot, never the database file.</p></div><span id="bridge-badge" class="status-badge">Checking</span></section>
             <section class="setting-card" id="sync-card" hidden>

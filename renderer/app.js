@@ -6,6 +6,9 @@ if (previewApi) Object.assign(previewApi, {
   licenseCheckout: async () => ({ error: 'checkout_unavailable' }),
   licensePortal: async () => ({ error: 'portal_unavailable' }),
   licenseTrack: async () => true,
+  statsStatus: async () => ({ enabled: true, active: true, envDisabled: false, installId: 'preview', askSource: true }),
+  statsSetEnabled: async (enabled) => ({ enabled: Boolean(enabled), active: Boolean(enabled), envDisabled: false, installId: 'preview', askSource: false }),
+  statsSourceAnswer: async () => ({ ok: true, sent: true }),
   onLicenseChanged: () => {},
   onLicenseLimit: () => {},
   onLicenseActivated: () => {},
@@ -1142,6 +1145,61 @@ $('#auth-plan-link')?.addEventListener('click', () => focusSettingsCard('license
     }
   });
 })();
+
+// Anonymous usage stats (TELEMETRY-CONTRACT.md): the Settings switch, and the
+// one-click "Where did you hear about Nūs?" row shown once after install.
+let statsState = null;
+function paintStatsState(status) {
+  statsState = status || statsState;
+  const toggle = $('#stats-toggle');
+  const label = $('#stats-label');
+  const badge = $('#stats-badge');
+  const note = $('#stats-status');
+  if (!toggle || !statsState) return;
+  toggle.checked = Boolean(statsState.enabled);
+  const on = Boolean(statsState.enabled);
+  label.textContent = on ? 'Anonymous usage stats are on' : 'Anonymous usage stats are off';
+  if (badge) { badge.textContent = on ? 'On' : 'Off'; badge.classList.toggle('good', on); }
+  if (note) note.textContent = statsState.envDisabled ? 'Nothing is sent from this build (NUS_STATS or a dev run).' : '';
+  // Keep the onboarding switch, if it is on screen, in step with Settings.
+  const onboardSwitch = $('#ob-stats-toggle'); if (onboardSwitch) onboardSwitch.checked = on;
+}
+async function renderStatsState() {
+  if (!api.statsStatus) { $('#stats-card')?.setAttribute('hidden', ''); return; }
+  try { paintStatsState(await api.statsStatus()); } catch {}
+}
+async function setStatsEnabled(enabled) {
+  if (!api.statsSetEnabled) return;
+  try { paintStatsState(await api.statsSetEnabled(Boolean(enabled))); }
+  catch { await renderStatsState(); }
+  if (!enabled) hideSourceAsk();
+}
+$('#stats-toggle')?.addEventListener('change', (event) => { setStatsEnabled(event.target.checked); });
+renderStatsState();
+
+function hideSourceAsk() {
+  const row = $('#source-ask');
+  if (!row || row.classList.contains('hidden')) return;
+  if (reducedMotion) { row.classList.add('hidden'); return; }
+  row.classList.add('leaving');
+  setTimeout(() => { row.classList.add('hidden'); row.classList.remove('leaving'); }, 260);
+}
+async function maybeShowSourceAsk() {
+  const row = $('#source-ask');
+  if (!row || !api.statsStatus) return;
+  let status = null;
+  try { status = await api.statsStatus(); } catch { return; }
+  if (!status || !status.askSource) return;
+  row.classList.remove('hidden');
+}
+$('#source-ask')?.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-source]');
+  if (!button) return;
+  $$('#source-ask button').forEach((b) => { b.disabled = true; });
+  try { await api.statsSourceAnswer?.(button.dataset.source); } catch {}
+  hideSourceAsk();
+  if (button.dataset.source !== 'skipped') showToast('Thanks. That is all it is used for.');
+});
 api.onLicenseLimit?.((result) => handleLimit(result));
 api.onLicenseActivated?.(async (plan) => {
   closeUpgradeSheet();
@@ -2276,16 +2334,27 @@ let tourIndex=0;
 let welcomeTimer=null;
 
 let onboardStep = 'focus';
+// The plain first-run notice with the switch right there (TELEMETRY-CONTRACT.md).
+// Rendered on whichever onboarding screen comes first, once per fresh install.
+function statsNoticeHtml(){
+  if(!api.statsStatus)return '';
+  const on=statsState?Boolean(statsState.enabled):true;
+  return `<label class="onboard-stats"><span class="switch"><input id="ob-stats-toggle" type="checkbox"${on?' checked':''} /><span class="slider"></span></span><span>Nūs sends anonymous usage stats (which features get used, never your coursework or what you type). Turn off in Settings.</span></label>`;
+}
+function bindStatsNotice(){
+  $('#ob-stats-toggle')?.addEventListener('change',(e)=>{setStatsEnabled(e.target.checked);});
+}
 function renderAuthStep(){
   onboardStep='auth';
   $('.onboard-card').dataset.step='auth';
-  $('#onboard-content').innerHTML=`<div class="section-kicker">Welcome</div><h2>Hey. I am Nūs.</h2><p>Sign in and Pro, whenever you want it, follows you to any PC. Your syllabi, notes, and transcripts stay on this machine either way. Supabase only holds your email and plan.</p>
+  $('#onboard-content').innerHTML=`<div class="section-kicker">Welcome</div><h2>Hey. I am Nūs.</h2><p>Sign in and Pro, whenever you want it, follows you to any PC. Your syllabi, notes, and transcripts stay on this machine either way; your account is only an email and a plan.</p>
     <div class="onboard-auth">
       <button id="ob-google" class="primary-button" type="button">Continue with Google</button>
       <div class="auth-divider"><span>or use email</span></div>
       <div class="onboard-auth-grid"><input id="ob-email" type="email" placeholder="School or personal email" autocomplete="email" /><input id="ob-password" type="password" placeholder="Password, 8+ characters" autocomplete="current-password" /></div>
       <div class="onboard-auth-row"><button id="ob-login" class="quiet-button" type="button">Sign in</button><button id="ob-signup" class="quiet-button" type="button">Create account</button><span id="ob-status" class="onboard-auth-status"></span></div>
-    </div>`;
+    </div>${statsNoticeHtml()}`;
+  bindStatsNotice();
   $('#onboard-dots').innerHTML='';
   $('#onboard-back').style.visibility='hidden';
   $('#onboard-next').textContent='Continue without an account';
@@ -2300,6 +2369,7 @@ function renderAuthStep(){
 }
 async function advanceFromAuthStep(){
   await api.setPreference('auth_prompted',true);
+  state.data.preferences.auth_prompted=true;
   onboardStep='focus';
   knotMood('thinking',900);
   swapOnboardContent(renderFocusPicker);
@@ -2307,7 +2377,11 @@ async function advanceFromAuthStep(){
 function renderFocusPicker(){
   onboardStep='focus';
   $('.onboard-card').dataset.step='focus';
-  $('#onboard-content').innerHTML=`<div class="section-kicker">Before we start</div><h2>What are you carrying this semester?</h2><p>Pick everything that applies. Nūs will shape the first week around it.</p><div class="choice-grid">${focusOptions.map(([label,detail],index)=>`<div class="choice-card${focusPicked.includes(label)?' active':''}" data-focus="${esc(label)}" style="--i:${index}"><strong>${esc(label)}</strong><span>${esc(detail)}</span></div>`).join('')}</div>`;
+  // The notice rides on this screen only when it is the first one (no auth
+  // step was shown and the install is not onboarded yet), never on replays.
+  const firstScreen=!state.data.preferences.onboarded&&!state.data.preferences.auth_prompted;
+  $('#onboard-content').innerHTML=`<div class="section-kicker">Before we start</div><h2>What are you carrying this semester?</h2><p>Pick everything that applies. Nūs will shape the first week around it.</p><div class="choice-grid">${focusOptions.map(([label,detail],index)=>`<div class="choice-card${focusPicked.includes(label)?' active':''}" data-focus="${esc(label)}" style="--i:${index}"><strong>${esc(label)}</strong><span>${esc(detail)}</span></div>`).join('')}</div>${firstScreen?statsNoticeHtml():''}`;
+  bindStatsNotice();
   $('#onboard-dots').innerHTML='';
   $('#onboard-back').style.visibility='hidden';
   $('#onboard-next').textContent=focusPicked.length?`Continue with ${focusPicked.length}`:'Continue';
@@ -2518,6 +2592,8 @@ async function start(){
     const auth=await needsAuthStep();
     openOnboarding(()=>{if(auth)renderAuthStep();else renderFocusPicker();});
   }
+  // One row, one click, once per install: where they heard about Nūs.
+  maybeShowSourceAsk();
 }
 start().catch((error)=>{console.error(error);showToast('Nūs could not read the local semester.');});
 

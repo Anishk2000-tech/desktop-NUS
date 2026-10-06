@@ -7,6 +7,15 @@ verify_jwt = true
 [functions.create-portal]
 verify_jwt = true
 
+# Anonymous usage stats (TELEMETRY-CONTRACT.md). Installs have no Supabase
+# user, so the gateway does not require a JWT: `track` validates and
+# rate-limits on its own, `daily-metrics` is guarded by METRICS_TOKEN.
+[functions.track]
+verify_jwt = false
+
+[functions.daily-metrics]
+verify_jwt = false
+
 [auth]
 site_url = "https://potlakai.github.io/nus/"
 additional_redirect_urls = ["nus-desktop://auth/callback", "https://potlakai.github.io/nus/pro.html", "https://potlakai.github.io/nus/success.html", "http://localhost:8126/pro.html"]

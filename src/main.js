@@ -27,6 +27,7 @@ const { installCrashHandlers } = require('./crash');
 const { createQuitGuard } = require('./quit-guard');
 const { createLicense } = require('./license');
 const { createLimits } = require('./limits');
+const { createStats } = require('./stats');
 const companionApp = require('../companion');
 
 const RENDERER_PREFERENCE_KEYS = new Set(['gpa_scale', 'brain_viewport', 'brain_layout', 'email_accounts', 'email_default', 'onboarded', 'focus_areas', 'auth_prompted']);
@@ -55,6 +56,7 @@ let companion = null; // controls returned by companion/index.js initCompanion
 let databaseReady = false;
 let licenseManager = null;
 let usageLimits = null;
+let stats = null; // anonymous usage stats, src/stats.js
 let pendingProtocolUrl = findProtocolUrl(process.argv);
 
 try {
@@ -228,16 +230,37 @@ function watchForPro() {
   if (win && !win.isDestroyed()) win.on('focus', proWatch.onFocus);
 }
 
-function trackEvent(name, props) {
-  if (!licenseManager) return;
-  let merged = props && typeof props === 'object' ? props : {};
-  // Funnel events carry the acquisition campaign labels (four short strings,
-  // no identity, no content) so activation can be traced back to the post
-  // that caused it. license.js re-sanitizes every prop before sending.
+// Funnel events carry the acquisition campaign labels (four short strings,
+// no identity, no content) so activation can be traced back to the post that
+// caused it. stats.js re-sanitizes every prop before sending.
+function withAcquisitionDims(name, props) {
+  const merged = props && typeof props === 'object' ? props : {};
   if (name === 'app_open' || name === 'signin' || name === 'first_import') {
-    merged = { ...acquisition.getDims(app.getPath('userData')), ...merged };
+    return { ...acquisition.getDims(app.getPath('userData')), ...merged };
   }
-  licenseManager.track(name, merged).catch(() => {});
+  return merged;
+}
+
+// Anonymous usage stats (TELEMETRY-CONTRACT.md): random install id, closed
+// event vocabulary, fire-and-forget. Resolves to { sent, ok, status } for the
+// few callers that need to know the server answered; everyone else ignores it.
+function trackEvent(name, props) {
+  if (!stats) return Promise.resolve({ sent: false, ok: false, status: null });
+  return stats.track(name, withAcquisitionDims(name, props)).catch(() => ({ sent: false, ok: false, status: null }));
+}
+
+// The first answered question is `first_ask`, later ones `ask` (mode: voice,
+// text or guide). Counts a turn, never its content.
+function trackAsk(mode) {
+  if (stats) stats.ask(mode).catch(() => {});
+}
+
+// What the renderer needs for the switch and the source question. The install
+// id itself stays in the main process; the renderer has no use for it.
+function statsSnapshot() {
+  if (!stats) return { enabled: true, active: false, envDisabled: true, askSource: false };
+  const { enabled, active, envDisabled, askSource } = stats.status();
+  return { enabled, active, envDisabled, askSource };
 }
 
 // Every refused cap is one funnel row. The unit is the error code minus its
@@ -519,8 +542,12 @@ function confirmSyllabus(payload) {
   }
   logActivity('syllabus_confirmed', `${course.name}: ${saved} assignment${saved === 1 ? '' : 's'} confirmed from syllabus`, { ref_table: 'courses', ref_id: courseId });
   // first_import is the activation event: the student reviewed and confirmed
-  // their first syllabus. Once per profile, ever.
-  if (acquisition.markFirstImportOnce(app.getPath('userData'))) trackEvent('first_import', {});
+  // their first syllabus. Once per profile, ever, and the flag is written only
+  // after the server answered, so an offline first import tries again on the
+  // next confirm instead of vanishing. Every later confirm is an `import`.
+  const userData = app.getPath('userData');
+  if (acquisition.hasFirstImport(userData)) trackEvent('import', {});
+  else acquisition.markFirstImportOnce(userData, () => trackEvent('first_import', {}).then((result) => result.sent)).catch(() => {});
   writeBridge();
   return { ok: true, courseId, assignments: saved, weights: Object.keys(weightIds).length };
 }
@@ -697,7 +724,6 @@ app.whenReady().then(async () => {
   licenseManager = createLicense({
     auth,
     config,
-    appVersion: app.getVersion(),
     // Offline Pro grace is encrypted with the OS account. It is deliberately
     // unavailable when secure storage is unavailable instead of trusting an
     // editable SQLite preference that could grant a fake subscription.
@@ -707,8 +733,25 @@ app.whenReady().then(async () => {
     },
   });
   usageLimits = createLimits({ db: api, license: licenseManager });
+  // Anonymous usage stats: on by default, off switch in Settings, nothing in
+  // unpackaged dev runs unless NUS_STATS=1, never in smoke runs. The enabled
+  // flag and the once-only bookkeeping live in the preferences table; the
+  // install id is <userData>/install_id.txt.
+  stats = createStats({
+    userData: app.getPath('userData'),
+    config,
+    appVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    env: SMOKE ? { ...process.env, NUS_STATS: '0' } : process.env,
+    store: {
+      get: (key) => api.getPreferences()[key],
+      set: (key, value) => api.setPreference(key, value),
+    },
+  });
   await refreshLicense();
-  trackEvent('app_open', {});
+  // `install` on the first run ever, `app_open` now and once per calendar day
+  // while the tray keeps the app alive.
+  stats.start(withAcquisitionDims('app_open', {}));
   writeBridge();
   await refreshGcalCache();
   gcalPollTimer = setInterval(refreshGcalCache, 600000);
@@ -749,8 +792,15 @@ app.whenReady().then(async () => {
     },
     onCaptureEnd: (meta) => {
       usageLimits.recordCompanionMs(meta.duration_ms);
+      // One row per ended Companion session: how long, nothing about what was said.
+      trackEvent('companion_session', { minutes: Math.max(0, Math.round((Number(meta.duration_ms) || 0) / 60000)) });
       sendToDesktop('license:changed', licenseSnapshot());
     },
+    // A question or voice command the Knot answered: first_ask once, then
+    // ask with its mode (voice, text, guide). Counts only, never the words.
+    onAsk: (mode) => trackAsk(mode),
+    // The Companion saved its own provider key (from the overlay's gear).
+    onKeyConnected: (provider) => { trackEvent('key_connected', { provider: String(provider || '').slice(0, 20) }); },
     onSessionStart: (meta) => {
       const settings = require('../companion/src/store').getSettings();
       if (settings.persistTranscripts === false) return null;
@@ -851,6 +901,7 @@ app.on('before-quit', (event) => {
 });
 app.on('will-quit', () => {
   try { if (companion) companion.unregisterShortcuts(); } catch {}
+  try { if (stats) stats.stop(); } catch {}
 });
 
 function mutate(fn) {
@@ -1029,7 +1080,7 @@ const handlers = {
   'license:status': () => licenseSnapshot(),
   'license:refresh': async () => { await refreshLicense(); return licenseSnapshot(); },
   'license:checkout': async (_event, meta) => {
-    trackEvent('upgrade_click', { unit: typeof meta?.reason === 'string' ? meta.reason : 'settings' });
+    trackEvent('upgrade_click', { reason: typeof meta?.reason === 'string' ? meta.reason.slice(0, 40) : 'settings' });
     const result = await licenseManager.createCheckout();
     if (result.url) {
       trackEvent('checkout_started', {});
@@ -1044,6 +1095,11 @@ const handlers = {
     return result.url ? { ok: true } : result;
   },
   'license:track': (_event, name, props) => { trackEvent(String(name), props && typeof props === 'object' ? props : {}); return true; },
+  // Anonymous usage stats: the Settings switch, the onboarding notice and the
+  // one-click "Where did you hear about Nūs?" row all go through these.
+  'stats:status': () => statsSnapshot(),
+  'stats:set-enabled': async (_event, enabled) => { if (stats) await stats.setEnabled(Boolean(enabled)); return statsSnapshot(); },
+  'stats:source-answer': async (_event, source) => (stats ? stats.answerSource(String(source || 'skipped')) : { ok: false }),
   'acquisition:redeem': (_event, token) => {
     const userData = app.getPath('userData');
     return acquisition.redeem(userData, acquisition.getSecret(userData), String(token || '').trim());
@@ -1120,7 +1176,11 @@ const handlers = {
     return result;
   },
   'ai:status': async () => ai.status(),
-  'ai:set-key': (_event, value) => ai.setApiKey(value),
+  'ai:set-key': (_event, value) => {
+    const result = ai.setApiKey(value);
+    if (result && result.ok) trackEvent('key_connected', { provider: 'anthropic' });
+    return result;
+  },
   'ai:clear-key': () => ai.clearApiKey(),
   'ai:test': async () => ai.testConnection(),
   'syllabus:import': async (_event, filePath) => {
@@ -1147,6 +1207,9 @@ const handlers = {
     if (!ticket.ok) return denied(ticket);
     const result = await assistantParse(text);
     if (['no_ai', 'cli_timeout', 'cli_failed', 'cli_not_logged_in', 'cli_spawn_failed', 'api_failed', 'api_refused', 'api_timeout', 'api_network'].includes(result?.error)) ticket.rollback();
+    // A plain question continues into chat:send, which counts it; only a
+    // proposal that ends the turn here is counted here, so one ask is one row.
+    else if (result?.proposal?.needs_confirm) trackAsk('text');
     return result;
   },
   'assistant:execute': async (_event, proposal) => assistantExecute(proposal),
@@ -1157,9 +1220,10 @@ const handlers = {
   // caller already parsed the intent).
   'chat:send': async (_event, messages, opts) => {
     const prep = await prepareChatTurn(messages, opts);
-    if (prep.response) return prep.response;
+    if (prep.response) { if (!prep.response.error) trackAsk('text'); return prep.response; }
     const result = await ai.complete(prep.prompt);
     if (result.error) { prep.ticket.rollback(); return result; }
+    trackAsk('text');
     return { text: String(result.text || '').trim() };
   },
   // Voice conversation with the Knot. Same pipeline as chat:send, but the Q&A
@@ -1167,13 +1231,14 @@ const handlers = {
   // channel so the hero transcript and constellation can move while Nūs thinks.
   'voice:ask': async (_event, messages) => {
     const prep = await prepareChatTurn(messages, {});
-    if (prep.response) return prep.response;
+    if (prep.response) { if (!prep.response.error) trackAsk('voice'); return prep.response; }
     (async () => {
       const result = await ai.completeStream(prep.prompt, (ev) => sendToDesktop('ai:event', ev));
       if (result.error) {
         prep.ticket.rollback();
         sendToDesktop('ai:event', { type: 'error', error: result.error, detail: result.detail });
       } else {
+        trackAsk('voice');
         sendToDesktop('ai:event', { type: 'done', text: String(result.text || '').trim() });
       }
     })();
@@ -1220,6 +1285,7 @@ const handlers = {
     const key = String(payload?.key || '').trim();
     if (!key) return { error: 'empty_key' };
     companionStore.setSettings({ apiKeys: { [provider]: key }, provider });
+    trackEvent('key_connected', { provider });
     return { ok: true, provider };
   },
   'companion:ai:clear-key': (_event, provider) => {

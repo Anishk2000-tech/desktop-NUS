@@ -107,18 +107,13 @@ test('server error codes pass through Checkout so the UI can explain them', asyn
   assert.equal((await configured.license.createCheckout()).error, 'billing_not_configured');
 });
 
-test('funnel events only send the closed vocabulary and never content', async () => {
-  const calls = [];
+test('the license module no longer writes funnel events keyed on the user', () => {
+  // Usage stats moved to src/stats.js on a random install id (v0.2.7), so
+  // anonymous installs count and public.events has no writer left.
   const auth = { getUser: () => ({ id: 'u1' }), getAccessToken: () => 'jwt' };
   const config = { supabase: { url: 'https://project.supabase.co', anonKey: 'publishable' }, isSupabaseConfigured: () => true };
-  const fetchImpl = async (url, init) => { calls.push({ url, body: JSON.parse(init.body) }); return { ok: true }; };
-  const license = createLicense({ auth, config, fetchImpl, appVersion: '0.2.2' });
-  assert.equal(await license.track('limit_hit', { unit: 'questions', syllabus: 'x'.repeat(500), nested: { a: 1 } }), true);
-  assert.equal(await license.track('made_up_event', {}), false);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, 'https://project.supabase.co/rest/v1/events');
-  assert.deepEqual(Object.keys(calls[0].body.props), ['unit', 'syllabus']);
-  assert.equal(calls[0].body.props.syllabus.length, 80);
-  assert.equal(calls[0].body.app_version, '0.2.2');
-  assert.equal(calls[0].body.user_id, 'u1');
+  const license = createLicense({ auth, config, fetchImpl: async () => { throw new Error('must not be called'); } });
+  assert.equal(typeof license.track, 'undefined');
+  const source = require('fs').readFileSync(require('path').join(__dirname, 'license.js'), 'utf8');
+  assert.doesNotMatch(source, /rest\/v1\/events/, 'no direct insert into public.events');
 });

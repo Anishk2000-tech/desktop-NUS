@@ -411,6 +411,12 @@ function maybeSendDailyLine() {
   } catch (_) { /* the daily line is best-effort, never a crash */ }
 }
 
+// A question or voice command the Knot answered. The desktop counts it as an
+// anonymous `ask` (mode: voice, text or guide), never the words. Best-effort.
+function noteAsk(mode) {
+  try { if (hooks.onAsk) hooks.onAsk(mode); } catch (_) { /* stats never break an answer */ }
+}
+
 // -------- feature runner --------
 async function runFeature(mode, userText) {
   if (state.busy) { send('llm:busy', {}); return; }
@@ -418,6 +424,7 @@ async function runFeature(mode, userText) {
   if (!def) return;
 
   const settings = store.getSettings();
+  const askMode = mode === 'guide' ? 'guide' : 'text';
 
   // The guide mode answers "what should I do" from the semester snapshot.
   // With no provider key (or provider-sharing off) it renders locally: the
@@ -438,6 +445,7 @@ async function runFeature(mode, userText) {
         : 'Nothing ranked yet. Import a syllabus or add a smart task in the desktop app and I will have a real answer.';
       send('llm:token', { text: local });
       send('llm:done', {});
+      noteAsk(askMode);
       return;
     }
     // Provider path continues below with the snapshot appended.
@@ -532,6 +540,7 @@ async function runFeature(mode, userText) {
       if (!sparActive) { sparActive = true; send('spar:state', { active: true }); }
     }
 
+    if (fullText) noteAsk(askMode);
     if (fullText && sessionId && hooks.onMessage) {
       hooks.onMessage(sessionId, { channel: 'nus', text: fullText, ts: Date.now(), mode, used_screenshot: Boolean(imageDataUrl) });
     }
@@ -820,7 +829,22 @@ function registerShortcuts() {
 // -------- IPC (namespaced companion:*) --------
 function registerIpc() {
   ipcMain.handle('companion:settings:get', () => ({ ...store.getSettings(), _migrationNote: store.migrationNote(), _founderTools: FOUNDER }));
-  ipcMain.handle('companion:settings:set', (_e, patch) => { sttDisabled = false; return store.setSettings(patch); });
+  ipcMain.handle('companion:settings:set', (_e, patch) => {
+    sttDisabled = false;
+    // A provider key that is new or changed counts as `key_connected` for the
+    // anonymous stats (provider name only, never the key).
+    const before = { ...(store.getSettings().apiKeys || {}) };
+    const result = store.setSettings(patch);
+    const keys = patch && patch.apiKeys && typeof patch.apiKeys === 'object' ? patch.apiKeys : null;
+    if (keys && hooks.onKeyConnected) {
+      for (const [provider, value] of Object.entries(keys)) {
+        if (typeof value === 'string' && value.trim() && value !== before[provider]) {
+          try { hooks.onKeyConnected(provider); } catch (_) { /* best-effort */ }
+        }
+      }
+    }
+    return result;
+  });
   ipcMain.handle('companion:shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
   ipcMain.handle('companion:capture:toggle', () => setCapturing(!state.capturing));
   ipcMain.handle('companion:capture:state', () => ({ active: state.capturing }));
@@ -886,6 +910,7 @@ function registerIpc() {
     if (p && p.text && p.text.trim()) {
       if (state.busy) { send('llm:busy', {}); return; }
       if (p.about && selection) { answerSelection(p.text); return; }
+      noteAsk(p.source === 'voice' ? 'voice' : 'guide');
       getGuide().start(p.text, p.source || 'typed');
     }
   });
@@ -1201,6 +1226,7 @@ function routeUtterance(text) {
   if (guide && guide.active()) { flash('Still on the last one. Say "wind up" first.', 3500); restoreKnotState(); return; }
   if (state.busy) { send('llm:busy', {}); restoreKnotState(); return; }
   flash('"' + text.slice(0, 60) + '"', 2500);
+  noteAsk('voice');
   getGuide().start(kind.text, 'voice');
 }
 
@@ -1342,6 +1368,7 @@ async function answerSelection(text) {
   } catch (e) { answer = 'I could not reach the model (' + (e.message || 'error').slice(0, 80) + ').'; }
   finally { state.busy = false; notifyDesktopState(); }
   console.log('[select] answered in ' + (Date.now() - t0) + 'ms' + (walk ? ' (walk suggested)' : ''));
+  noteAsk('text');
   if (selection !== sel || !win || win.isDestroyed()) return;
   send('guide:state', { state: 'explaining', task: 'ask' });
   send('guide:bubble', { text: answer.replace(/[–—]/g, ',').slice(0, 600), anchor: 'tip', task: 'ask', kicker: sel.name ? sel.name.slice(0, 40) : 'selected', actions: [{ id: 'walk', label: 'Walk me through it', primary: walk }, { id: 'dismiss', label: 'OK' }] });
@@ -1467,6 +1494,8 @@ function stopCursorProbe() {
 //   onOutboxEvent()                       an outbox event was appended (live ingest)
 //   audioRoot() -> path                   folder for opt-in retained audio
 //   showDesktop()                         focus/reopen the desktop window
+//   onAsk(mode)                           an answered ask: 'voice' | 'text' | 'guide' (anonymous stats)
+//   onKeyConnected(provider)              the overlay saved a provider key (anonymous stats)
 function initCompanion(providedHooks = {}) {
   hooks = providedHooks;
 

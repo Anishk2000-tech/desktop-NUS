@@ -2,8 +2,9 @@
 
 The semester organizer that runs on your own AI, on your own machine. Import a
 real syllabus, see your whole semester as a living map, and let Nūs propose the
-next move. Nothing is saved without your review, and your data never leaves
-your computer except the calls you configure below.
+next move. Nothing is saved without your review, and your coursework never
+leaves your computer except through the calls you configure below (see
+[Privacy](#privacy) for the anonymous usage stats and how to turn them off).
 
 ## You bring the AI (required)
 
@@ -73,8 +74,8 @@ Nūs Free runs a whole semester with honest caps: 3 AI syllabus imports, 10
 questions a day, 1 connected account, 1 automation rule, 20 Companion minutes
 a day with 7 days of history, 512 MB of storage. Pro ($9.99 a month) lifts
 them. Caps are counted locally; the plan itself is tied to your Nūs account
-(Supabase holds only your email and plan) and paid through Stripe Checkout.
-Card details never touch this app.
+(your account is an email and a plan, nothing else) and paid through Stripe
+Checkout. Card details never touch this app.
 
 ## What's inside
 
@@ -131,10 +132,15 @@ every meeting, class, interview, or assessment you are in.
 
 Local-first by design. The database lives at `%APPDATA%\Nus\data\nus.db`
 (`~/Library/Application Support/Nus/data/nus.db` on a Mac) and
-everything Nūs knows stays on this device. The only outbound calls are the AI
+everything Nūs knows stays on this device. The outbound calls are the AI
 providers you configured, the integrations you explicitly connect, and, if you
 sign in, the Supabase account check (email and plan, never content) plus Stripe
 when you buy Pro. There is no cloud sync of your coursework.
+
+Anonymous usage stats (which features get used, on a random install id) help
+us see what works. Your coursework and what you type stay on your device. Turn
+it off in Settings. The full list of what is sent, where the install id lives,
+and how to switch it off is in [docs/stats.md](docs/stats.md).
 
 ## Stack
 

@@ -1,11 +1,9 @@
 const OFFLINE_GRACE_MS = 72 * 60 * 60 * 1000;
 
-// Event names the server accepts (public.events CHECK constraint). Anything
-// else is dropped here so a typo never becomes a 400 in the logs.
-const TRACKABLE_EVENTS = new Set([
-  'app_open', 'signin', 'key_connected', 'first_import',
-  'limit_hit', 'upgrade_click', 'checkout_started', 'companion_session',
-]);
+// Funnel events used to be inserted into public.events from here, keyed on the
+// signed-in user, which meant anonymous installs (most of them) never counted.
+// Since v0.2.7 every event goes through src/stats.js on a random install id.
+// Nothing writes public.events any more.
 
 function freeState(reason = 'free') {
   return {
@@ -27,7 +25,7 @@ function isStripeUrl(value) {
   return url.toString();
 }
 
-function createLicense({ auth, config, cacheStore, fetchImpl = global.fetch, clock = () => Date.now(), appVersion = null }) {
+function createLicense({ auth, config, cacheStore, fetchImpl = global.fetch, clock = () => Date.now() }) {
   let state = freeState('not_checked');
 
   function cachedFor(userId) {
@@ -131,30 +129,7 @@ function createLicense({ auth, config, cacheStore, fetchImpl = global.fetch, clo
     return result;
   }
 
-  // Funnel counters only. Fire-and-forget: a failed insert never surfaces to
-  // the student, and nothing here carries content (see public.events).
-  async function track(name, props = {}) {
-    if (!TRACKABLE_EVENTS.has(name)) return false;
-    const user = auth.getUser();
-    const token = auth.getAccessToken();
-    if (!user || !token || !config.isSupabaseConfigured(config)) return false;
-    const safeProps = {};
-    for (const [key, value] of Object.entries(props || {})) {
-      if (['string', 'number', 'boolean'].includes(typeof value)) safeProps[String(key).slice(0, 40)] = typeof value === 'string' ? value.slice(0, 80) : value;
-    }
-    try {
-      const response = await fetchImpl(`${config.supabase.url}/rest/v1/events`, {
-        method: 'POST',
-        headers: { ...authHeaders(token), Prefer: 'return=minimal' },
-        body: JSON.stringify({ user_id: user.id, name, app_version: appVersion, props: safeProps }),
-      });
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  return { refresh, status, createCheckout, createPortal, track };
+  return { refresh, status, createCheckout, createPortal };
 }
 
-module.exports = { createLicense, OFFLINE_GRACE_MS, TRACKABLE_EVENTS, isStripeUrl };
+module.exports = { createLicense, OFFLINE_GRACE_MS, isStripeUrl };

@@ -95,15 +95,33 @@ function getDims(userDataDir) {
 
 // first_import is the activation event: fired once per profile, ever, when the
 // student confirms their first syllabus import.
-function markFirstImportOnce(userDataDir) {
-  const flagPath = path.join(userDataDir, FIRST_IMPORT_FLAG);
-  if (fs.existsSync(flagPath)) return false;
-  try {
-    fs.writeFileSync(flagPath, JSON.stringify({ tracked_at: new Date().toISOString() }));
-  } catch {
-    return false; // if we cannot persist the flag, do not risk double counting
-  }
-  return true;
+function hasFirstImport(userDataDir) {
+  return fs.existsSync(path.join(userDataDir, FIRST_IMPORT_FLAG));
 }
 
-module.exports = { verifyToken, getSecret, redeem, getDims, markFirstImportOnce };
+// Sends through `send` (async, resolves true when the server answered) and
+// writes the flag only after that. Writing first lost the event whenever the
+// send failed: an offline first import, or (before anonymous stats) an import
+// made before signing in, could never fire again. A concurrent second call
+// while the send is in flight is a no-op, so nothing double counts.
+const firstImportInFlight = new Set();
+async function markFirstImportOnce(userDataDir, send) {
+  const flagPath = path.join(userDataDir, FIRST_IMPORT_FLAG);
+  if (fs.existsSync(flagPath) || firstImportInFlight.has(flagPath)) return false;
+  firstImportInFlight.add(flagPath);
+  try {
+    let sent = true;
+    if (typeof send === 'function') {
+      try { sent = Boolean(await send()); } catch { sent = false; }
+    }
+    if (!sent) return false;
+    fs.writeFileSync(flagPath, JSON.stringify({ tracked_at: new Date().toISOString() }));
+    return true;
+  } catch {
+    return false; // if we cannot persist the flag, do not risk double counting
+  } finally {
+    firstImportInFlight.delete(flagPath);
+  }
+}
+
+module.exports = { verifyToken, getSecret, redeem, getDims, hasFirstImport, markFirstImportOnce };

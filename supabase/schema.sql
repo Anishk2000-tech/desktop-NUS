@@ -171,6 +171,11 @@ create policy "devices: update own"
 -- and so the table stays queryable. `props` is for small dimensions only
 -- (which limit was hit, which provider) and is size-capped. Never put user
 -- content, prompt text, course names, or file names in it.
+--
+-- RETIRED as a write target in v0.2.7: the desktop app now sends anonymous
+-- usage stats to `install_events` (bottom of this file) through the `track`
+-- function, so anonymous installs count too. Nothing writes here any more; the
+-- table and its rows stay for the dashboards that already read them.
 
 create table if not exists public.events (
   id          bigint generated always as identity primary key,
@@ -314,3 +319,197 @@ on conflict (user_id) do nothing;
 insert into public.subscriptions (user_id, status, plan)
 select u.id, 'none', 'free' from auth.users u
 on conflict (user_id) do nothing;
+
+
+-- =============================================================================
+-- install_events: anonymous usage stats (ADDITIVE, 2026-10-05)
+-- =============================================================================
+-- Everything in this section is additive and idempotent: it creates new
+-- objects only and never alters the tables above, so it is safe to paste into
+-- the live project's SQL editor on its own.
+--
+-- Contract: ventures/nus/growth-os/TELEMETRY-CONTRACT.md (the Growth OS repo).
+-- Change the contract first, then this file, then the `track` function.
+--
+-- One row per event, keyed on a random per-install UUID that the client makes
+-- on first launch and never ties to an account. Counters, not content: `props`
+-- is a flat object of allowed keys (campaign labels, which feature, which
+-- provider, minutes) and is capped at 1 KB by the trigger below. Coursework and
+-- anything the user types never land here.
+--
+-- WRITE BOUNDARY. RLS is on and there are NO policies, so the anon and
+-- authenticated roles can neither read nor write. The only writer is the
+-- `track` Edge Function and the only reader is `daily-metrics`, both using the
+-- service role key, which bypasses RLS.
+
+create table if not exists public.install_events (
+  id          bigint generated always as identity primary key,
+  install_id  uuid not null,
+  product     text not null
+    check (product in ('desktop', 'companion')),
+  name        text not null
+    check (name in (
+      'install',            -- first launch ever on this install id
+      'app_open',           -- once per process start and once per day in the tray
+      'source_answer',      -- props.source: where they heard about Nus
+      'first_import',       -- first confirmed syllabus import (desktop)
+      'import',             -- later confirmed imports (desktop)
+      'first_ask',          -- first question or voice command answered
+      'ask',                -- later asks; props.mode: voice | text | guide
+      'key_connected',      -- props.provider
+      'companion_session',  -- props.minutes (integer)
+      'signin',             -- props.method: google | email
+      'limit_hit',          -- props.unit
+      'upgrade_click',      -- props.reason
+      'checkout_started',
+      'stats_off'           -- the user turned stats off; last event from that install
+    )),
+  app_version text,
+  platform    text,
+  props       jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(props) = 'object'),
+  -- The UTC day the event landed on. Stored, not computed, so the dedupe index
+  -- below and every daily rollup read the same value.
+  day         date not null default (now() at time zone 'utc')::date,
+  created_at  timestamptz not null default now()
+);
+
+-- 1 KB props ceiling. A trigger rather than a CHECK for the same reason as
+-- events_props_size: the size functions are not immutable.
+create or replace function public.check_install_event_props_size()
+returns trigger
+language plpgsql
+as $$
+begin
+  if pg_column_size(new.props) > 1024 then
+    raise exception 'install_events.props too large (% bytes, max 1024)', pg_column_size(new.props);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists install_events_props_size on public.install_events;
+create trigger install_events_props_size
+  before insert or update on public.install_events
+  for each row execute function public.check_install_event_props_size();
+
+-- RLS on, no policies: service role only.
+alter table public.install_events enable row level security;
+
+-- One app_open per install per UTC day. The `track` function treats the
+-- unique violation on a second open as "do nothing" and still answers 204
+-- (PostgREST cannot write the `on conflict ... where` a partial index needs).
+create unique index if not exists install_events_one_open_per_day
+  on public.install_events (install_id, name, day)
+  where name in ('app_open');
+
+create index if not exists install_events_name_day_idx
+  on public.install_events (name, day);
+create index if not exists install_events_install_day_idx
+  on public.install_events (install_id, day);
+
+
+-- =============================================================================
+-- install_daily_metrics(since): the rollup the `daily-metrics` function returns
+-- =============================================================================
+-- Completed UTC days only (day < current_date), so a day is never pulled twice
+-- with different numbers. Row shape matches growth_os/metrics_pull.py exactly:
+-- (day, product, action_id, event_name, event_count, value).
+--
+--   install, first_import, first_ask, signin, upgrade_click, checkout_started:
+--     count per day, product and action_id, where action_id is
+--     coalesce(props.acq_action_id, 'source:' || <that install's source_answer>, '').
+--   app_open:   distinct installs with an app_open that day.
+--   d1_open:    installs whose install day is day - 1 with an app_open on day.
+--   d7_open:    same with day - 7.
+--   paid:       subscriptions whose Stripe subscription was created that day
+--               (product 'desktop', action_id '').
+--
+-- Service role only: anon and authenticated cannot execute it.
+
+create or replace function public.install_daily_metrics(since date)
+returns table (
+  day         date,
+  product     text,
+  action_id   text,
+  event_name  text,
+  event_count bigint,
+  value       numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with source_by_install as (
+    select distinct on (install_id) install_id, props->>'source' as source
+    from public.install_events
+    where name = 'source_answer' and props ? 'source'
+    order by install_id, created_at
+  ),
+  counted as (
+    select
+      e.day,
+      e.product,
+      coalesce(e.props->>'acq_action_id', 'source:' || sbi.source, '') as action_id,
+      e.name as event_name,
+      count(*)::bigint as event_count
+    from public.install_events e
+    left join source_by_install sbi on sbi.install_id = e.install_id
+    where e.name in ('install', 'first_import', 'first_ask', 'signin', 'upgrade_click', 'checkout_started')
+      and e.day >= since
+      and e.day < current_date
+    group by 1, 2, 3, 4
+  ),
+  opens as (
+    select day, product, '' as action_id, 'app_open' as event_name, count(distinct install_id)::bigint as event_count
+    from public.install_events
+    where name = 'app_open' and day >= since and day < current_date
+    group by 1, 2
+  ),
+  installs as (
+    select install_id, min(day) as install_day
+    from public.install_events
+    where name = 'install'
+    group by 1
+  ),
+  retention as (
+    select
+      o.day,
+      o.product,
+      '' as action_id,
+      case when o.day = i.install_day + 1 then 'd1_open' else 'd7_open' end as event_name,
+      count(distinct o.install_id)::bigint as event_count
+    from public.install_events o
+    join installs i on i.install_id = o.install_id
+    where o.name = 'app_open'
+      and o.day >= since
+      and o.day < current_date
+      and (o.day = i.install_day + 1 or o.day = i.install_day + 7)
+    group by 1, 2, 3, 4
+  ),
+  paid as (
+    select
+      (sub.stripe_subscription_created_at at time zone 'utc')::date as day,
+      'desktop' as product,
+      '' as action_id,
+      'paid' as event_name,
+      count(*)::bigint as event_count
+    from public.subscriptions sub
+    where sub.stripe_subscription_created_at is not null
+      and (sub.stripe_subscription_created_at at time zone 'utc')::date >= since
+      and (sub.stripe_subscription_created_at at time zone 'utc')::date < current_date
+    group by 1
+  ),
+  everything as (
+    select * from counted
+    union all select * from opens
+    union all select * from retention
+    union all select * from paid
+  )
+  select day, product, action_id, event_name, event_count, null::numeric as value
+  from everything
+  order by day, product, event_name, action_id;
+$$;
+
+revoke all on function public.install_daily_metrics(date) from public, anon, authenticated;
