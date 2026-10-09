@@ -1530,6 +1530,8 @@ async function submitGlobalAsk(){
   try{
     const result=await api.assistantParse(text);
     if(handleLimit(result)){globalAnswer.classList.add('hidden');return;}
+    // One call answered it: the text is the answer, no second round trip.
+    if(!result.error&&!result.proposal&&result.text){globalAnswer.textContent=result.text;globalAnswer.classList.remove('hidden');return;}
     if(result.error||!result.proposal||!result.proposal.needs_confirm){await answerWithAi(result?.proposal?.command?.question||text,globalAnswer,Boolean(result.error));return;}
     state.proposal=result.proposal;setView('today');renderProposal();
   }finally{state.busy=false;renderHero();}
@@ -2086,6 +2088,8 @@ api.onAiEvent?.((ev)=>{
     if(!voiceNusLine){voiceNusLine={role:'nus',text};voiceTurns.push(voiceNusLine);}
     voiceNusLine.text=text;delete voiceNusLine.pending;
     voiceNusLine=null;voicePendingAsk=false;
+    // The one-call turn carries the proposal, when there is one, on this event.
+    voiceProposal=ev.proposal||null;
     renderVoiceThread();
     syncVoiceIntoChat(lastVoiceUser(),text);
     speakReply(text);
@@ -2093,6 +2097,7 @@ api.onAiEvent?.((ev)=>{
   }
   if(ev.type==='error'){
     voicePendingAsk=false;voiceNusLine=null;
+    if(handleLimit({error:ev.error,upgrade:ev.upgrade})){stopVoice();return;}
     voiceNote(aiError(ev.error,ev.detail));
     setVoiceState('listening');
   }
@@ -2263,8 +2268,11 @@ async function submitToNus(text){
   try{
     const result=await api.assistantParse(text);
     if(result.error==='no_ai'||result.error==='cli_not_logged_in'){answerLocally(text);showToast(aiError(result.error));return;}
+    if(handleLimit(result))return;
     if(result.error){reportAiError(result);return;}
     const proposal=result.proposal;
+    // One call answered it: show the text; only a write needs the confirm card.
+    if(!proposal){if(result.text){askAnswer.textContent=result.text;askAnswer.classList.remove('hidden');}else answerLocally(text);return;}
     if(!proposal.needs_confirm){await answerWithAi(proposal.command.question||text,askAnswer);return;}
     state.proposal=proposal;renderProposal();
   }finally{state.busy=false;renderHero();}
