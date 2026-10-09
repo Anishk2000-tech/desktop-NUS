@@ -28,7 +28,9 @@ const { createQuitGuard } = require('./quit-guard');
 const { createLicense } = require('./license');
 const { createLimits } = require('./limits');
 const { createStats } = require('./stats');
+const { createMemory, parseAiMemory, MEMORY_PROMPT } = require('./memory');
 const companionApp = require('../companion');
+let memory = null;
 
 const RENDERER_PREFERENCE_KEYS = new Set(['gpa_scale', 'brain_viewport', 'brain_layout', 'email_accounts', 'email_default', 'onboarded', 'focus_areas', 'auth_prompted']);
 const crashHandlers = installCrashHandlers(app, dialog);
@@ -582,11 +584,17 @@ function fuzzyFindTarget(targetTitle, courseId) {
   return { kind: best.kind, id: best.id, title: best.title, course_name: courses[best.course_id] || null };
 }
 
+// What the student has told Nūs about themselves (src/memory.js), framed as
+// facts rather than instructions; empty when nothing is saved.
+function memoryBlock() {
+  try { const s = memory ? memory.summary() : ''; return s ? '\n' + s : ''; } catch { return ''; }
+}
+
 function studentSummary() {
   const courses = api.listCourses();
   const ranked = rankedToday();
   const openTasks = api.listTasks().filter((t) => !t.done).length;
-  return `Today: ${new Date().toISOString().slice(0, 10)}. Courses: ${courses.map((c) => c.name + (c.code ? ` (${c.code})` : '')).join('; ') || 'none'}. Next deadlines: ${ranked.slice(0, 5).map((r) => `${r.title} due ${r.due_date} (${r.course_name})`).join('; ') || 'none'}. Open tasks: ${openTasks}.`;
+  return `Today: ${new Date().toISOString().slice(0, 10)}. Courses: ${courses.map((c) => c.name + (c.code ? ` (${c.code})` : '')).join('; ') || 'none'}. Next deadlines: ${ranked.slice(0, 5).map((r) => `${r.title} due ${r.due_date} (${r.course_name})`).join('; ') || 'none'}. Open tasks: ${openTasks}.` + memoryBlock();
 }
 
 // Chat needs more than the one-line command summary: buckets that separate
@@ -607,7 +615,7 @@ function chatContext() {
     `Due in the next 7 days: ${week.slice(0, 8).map(line).join('; ') || 'nothing'}.`,
     `Overdue: ${overdue.slice(0, 8).map(line).join('; ') || 'nothing'}${overdue.length > 8 ? ` (and ${overdue.length - 8} more)` : ''}.`,
     `Open tasks: ${tasks.slice(0, 8).map((t) => t.title + (t.due_date ? ` (due ${t.due_date})` : '')).join('; ') || 'none'} (${tasks.length} open).`,
-  ].join('\n');
+  ].join('\n') + memoryBlock();
 }
 
 // Deterministic follow-up questions keep the conversation moving when the
@@ -733,6 +741,9 @@ app.whenReady().then(async () => {
     },
   });
   usageLimits = createLimits({ db: api, license: licenseManager });
+  // What Nūs knows about the student (src/memory.js): a short block of their
+  // own saved facts rides in every prompt; kept in <userData>/memory.json.
+  memory = createMemory({ file: path.join(app.getPath('userData'), 'memory.json'), log: (m) => console.log('[memory]', m) });
   // Anonymous usage stats: on by default, off switch in Settings, nothing in
   // unpackaged dev runs unless NUS_STATS=1, never in smoke runs. The enabled
   // flag and the once-only bookkeeping live in the preferences table; the
@@ -1097,6 +1108,13 @@ const handlers = {
   'license:track': (_event, name, props) => { trackEvent(String(name), props && typeof props === 'object' ? props : {}); return true; },
   // Anonymous usage stats: the Settings switch, the onboarding notice and the
   // one-click "Where did you hear about Nūs?" row all go through these.
+  // What Nūs knows about the student: list, add, drop, paste-import.
+  'memory:panel': () => (memory ? memory.panel() : { profile: {}, facts: [], imports: {} }),
+  'memory:add': (_event, key, value) => { if (memory) { memory.add(String(key || 'note').slice(0, 40), String(value || '').slice(0, 500), 'you'); memory.save(); } return memory ? memory.panel() : null; },
+  'memory:remove': (_event, id) => { if (memory) { memory.remove(String(id || '')); memory.save(); } return memory ? memory.panel() : null; },
+  'memory:import': (_event, source, text) => { if (!['chatgpt', 'claude', 'gemini', 'ai'].includes(source)) return { error: 'bad_source' }; if (memory) { memory.merge(source, parseAiMemory(String(text || '').slice(0, 40000))); memory.save(); } return memory ? memory.panel() : null; },
+  'memory:forget-source': (_event, source) => { if (memory) { memory.forgetSource(String(source || '')); memory.save(); } return memory ? memory.panel() : null; },
+  'memory:prompt': () => MEMORY_PROMPT,
   'stats:status': () => statsSnapshot(),
   'stats:set-enabled': async (_event, enabled) => { if (stats) await stats.setEnabled(Boolean(enabled)); return statsSnapshot(); },
   'stats:source-answer': async (_event, source) => (stats ? stats.answerSource(String(source || 'skipped')) : { ok: false }),

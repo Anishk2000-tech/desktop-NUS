@@ -907,6 +907,7 @@ async function renderSettings(){
   renderCompanionAiState();
   renderGpaScale();
   renderStorage();
+  renderMemoryState();
 }
 
 // The Companion's provider key, managed from the desktop so the overlay is
@@ -1176,6 +1177,54 @@ async function setStatsEnabled(enabled) {
 }
 $('#stats-toggle')?.addEventListener('change', (event) => { setStatsEnabled(event.target.checked); });
 renderStatsState();
+
+// What Nūs knows about the student: one row per fact, private ones masked,
+// add and forget here, or paste in what another assistant already knows.
+function paintMemory(panel) {
+  const list = $('#memory-list');
+  if (!list || !panel) return;
+  const rows = panel.facts || [];
+  list.innerHTML = rows.length
+    ? rows.map((f) => `<div class="memory-row"><span><strong>${esc(f.label)}</strong> ${esc(f.value)}${f.sensitive ? ' <em class="muted">private</em>' : ''}<br><small class="muted">${esc((f.sources || []).join(', '))}</small></span><button type="button" class="ghost" data-memory-remove="${esc(f.id)}">Forget</button></div>`).join('')
+    : '<p class="muted">Nothing saved yet. Add a fact below, or tell the Knot to remember something.</p>';
+  const imports = Object.entries(panel.imports || {});
+  const drop = $('#memory-forget-source');
+  if (drop) { drop.hidden = !imports.length; if (imports.length) drop.textContent = 'Remove imported (' + imports.map(([s, i]) => s + ' ' + i.added).join(', ') + ')'; }
+  const badge = $('#memory-badge'); if (badge) badge.textContent = rows.length ? rows.length + (rows.length === 1 ? ' fact' : ' facts') : 'Empty';
+}
+async function renderMemoryState() {
+  if (!api.memoryPanel) { $('#memory-card')?.setAttribute('hidden', ''); return; }
+  try { paintMemory(await api.memoryPanel()); } catch {}
+}
+const memoryNote = (text) => { const n = $('#memory-note'); if (n) n.textContent = text; };
+$('#memory-add')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const value = $('#memory-value').value.trim();
+  if (!value) return;
+  try { paintMemory(await api.memoryAdd($('#memory-key').value, value)); $('#memory-value').value = ''; memoryNote('Saved.'); } catch { memoryNote('Could not save that.'); }
+});
+$('#memory-list')?.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-memory-remove]');
+  if (!button) return;
+  try { paintMemory(await api.memoryRemove(button.dataset.memoryRemove)); memoryNote('Forgotten.'); } catch { memoryNote('Could not forget that.'); }
+});
+$('#memory-prompt')?.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(await api.memoryPrompt()); memoryNote('Prompt copied. Paste it into your assistant, then paste its answer above.'); } catch { memoryNote('Could not copy the prompt.'); }
+});
+$('#memory-import')?.addEventListener('click', async () => {
+  const text = $('#memory-paste').value.trim();
+  if (!text) { memoryNote('Paste the answer first.'); return; }
+  try {
+    const source = $('#memory-source').value;
+    const panel = await api.memoryImport(source, text);
+    paintMemory(panel); $('#memory-paste').value = '';
+    const i = panel && panel.imports && panel.imports[source];
+    memoryNote(i ? `Imported ${i.added} of ${i.count} facts.` : 'Imported.');
+  } catch { memoryNote('Could not import that.'); }
+});
+$('#memory-forget-source')?.addEventListener('click', async () => {
+  try { paintMemory(await api.memoryForgetSource($('#memory-source').value)); memoryNote('Imported facts removed.'); } catch { memoryNote('Could not remove those.'); }
+});
 
 function hideSourceAsk() {
   const row = $('#source-ask');
