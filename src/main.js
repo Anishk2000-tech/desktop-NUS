@@ -759,12 +759,20 @@ app.whenReady().then(async () => {
       set: (key, value) => api.setPreference(key, value),
     },
   });
-  await refreshLicense();
-  // `install` on the first run ever, `app_open` now and once per calendar day
-  // while the tray keeps the app alive.
+  // The window first. The license check and the calendar pull are network
+  // calls: they used to run before createWindow() with no timeout, so a slow
+  // or paused Supabase, or a Google refresh, held a blank desktop. Now they
+  // run once the window is up, each under its own cap, and push their results
+  // over the events the renderer already listens to.
   stats.start(withAcquisitionDims('app_open', {}));
   writeBridge();
-  await refreshGcalCache();
+  createWindow();
+  const capped = (label, promise, ms) => Promise.race([
+    Promise.resolve().then(() => promise).catch((e) => console.error('[nus] ' + label + ' failed', e)),
+    new Promise((resolve) => setTimeout(resolve, ms, undefined)),
+  ]);
+  capped('license refresh', refreshLicense(), 4500).then(() => writeBridge());
+  capped('calendar refresh', refreshGcalCache(), 6000).then(() => { writeBridge(); sendToDesktop('state:refresh', { calendar: gcalCache.length }); });
   gcalPollTimer = setInterval(refreshGcalCache, 600000);
 
   ingestCompanionEvents();

@@ -99,6 +99,8 @@ contextBridge.exposeInMainWorld('nus', {
   onCompanionState: (cb) => ipcRenderer.on('companion:state', (_e, data) => cb(data)),
   onAuthChanged: (cb) => ipcRenderer.on('auth:changed', (_e, data) => cb(data)),
   onLicenseChanged: (cb) => ipcRenderer.on('license:changed', (_e, data) => cb(data)),
+  // Main finished a background refresh (calendar) after the window was up: pull the state again.
+  onStateRefresh: (cb) => ipcRenderer.on('state:refresh', (_e, data) => cb(data)),
   onDesktopTour: (cb) => ipcRenderer.on('desktop:tour', () => cb()),
   onDesktopHistory: (cb) => ipcRenderer.on('desktop:history', () => cb()),
   onDesktopVoiceSetup: (cb) => ipcRenderer.on('desktop:voice-setup', () => cb()),

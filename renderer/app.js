@@ -1835,6 +1835,10 @@ $('#companion-power')?.addEventListener('click', async()=>{
 });
 $('#companion-capture')?.addEventListener('click', async()=>{ const s=await api.companionControl?.(companionState.capturing?'capture-stop':'capture-start'); if(s?.error)reportAiError(s);if(s) companionState=s; paintCompanionPanel(); });
 api.onCompanionState?.((s)=>{ if(s){ companionState=s; if(state.view==='companion') paintCompanionPanel(); renderHero(); } });
+// The window opens before the license check and the calendar pull finish:
+// their results arrive here and repaint what they touch.
+api.onLicenseChanged?.((plan)=>{ renderLicenseState(plan).catch(()=>{}); });
+api.onStateRefresh?.(()=>{ load().catch(()=>{}); });
 
 // ---- Knot-pane chat: a persistent thread over the same AI pipeline. ----
 // Actionable requests come back with a proposal; the confirm buttons run the
