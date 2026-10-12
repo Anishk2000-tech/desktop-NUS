@@ -823,8 +823,6 @@ app.whenReady().then(async () => {
     }
   }, 60000);
 
-  createWindow();
-
   // A failing save is the one problem the user must not discover later.
   setSaveStateListener((state) => sendToDesktop('db:save-state', state));
 
