@@ -1,3 +1,7 @@
+# Source checks out with LF everywhere, Windows included. Several contract
+# tests match multi-line source, and Git for Windows (and GitHub's Windows
+# runners) would otherwise turn every file into CRLF and fail them.
+* text=auto eol=lf
 # Windows scripts keep CRLF line endings whatever the checkout settings are.
 *.bat text eol=crlf
 *.cmd text eol=crlf
