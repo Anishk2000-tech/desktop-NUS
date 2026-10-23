@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { shell, app } = require('electron');
 const secrets = require('./secrets');
-const config = require('./config');
+const config = require('./app-config');
 
 const TOKEN_KEY = 'outlook_token';
 const REDIRECT_HOST = '127.0.0.1';

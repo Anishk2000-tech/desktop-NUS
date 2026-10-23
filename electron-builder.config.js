@@ -143,7 +143,9 @@ const config = {
       { x: 410, y: 220, type: 'link', path: '/Applications' },
     ],
   },
-  publish: [{ provider: 'github', owner: 'potlakai', repo: 'nus-desktop' }],
+  // Local Edition never self-updates (src/main.js), so this feed is never
+  // read; it names this fork so nothing points at the upstream cloud build.
+  publish: [{ provider: 'github', owner: 'Anishk2000-tech', repo: 'desktop-NUS' }],
 };
 
 if (azure) console.log('[electron-builder] Azure Trusted Signing is configured; the Windows installer will be signed.');

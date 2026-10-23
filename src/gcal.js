@@ -2,7 +2,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { app, shell } = require('electron');
 const secrets = require('./secrets');
-const config = require('./config');
+const config = require('./app-config');
 
 const TOKEN_KEY = 'gcal_token';
 const REDIRECT_HOST = '127.0.0.1';

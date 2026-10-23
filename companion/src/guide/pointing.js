@@ -40,6 +40,27 @@ const SYSTEM = [
   '- Plain words. Never say "I can see" and never describe the screenshot. Never mention ids or coordinates in the instruction.',
 ].join('\n');
 
+// The same contract as SYSTEM, as a JSON schema. LM Studio turns it into a
+// grammar, so a local model can only answer in this shape: no prose around
+// it, no fences, no misspelt keys. The validator below still checks values.
+const POINT_SCHEMA = {
+  type: 'object',
+  properties: {
+    instruction: { type: 'string' },
+    target: {
+      anyOf: [
+        { type: 'object', properties: { kind: { type: 'string', enum: ['element'] }, id: { type: 'integer' } }, required: ['kind', 'id'] },
+        { type: 'object', properties: { kind: { type: 'string', enum: ['bbox'] }, x: { type: 'number' }, y: { type: 'number' }, w: { type: 'number' }, h: { type: 'number' }, label: { type: 'string' } }, required: ['kind', 'x', 'y', 'w', 'h', 'label'] },
+        { type: 'null' },
+      ],
+    },
+    confidence: { type: 'number' },
+    done: { type: 'boolean' },
+    note: { type: 'string' },
+  },
+  required: ['instruction', 'target', 'confidence', 'done', 'note'],
+};
+
 function clip(s, n) { s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
 function elementLines(elements) {
@@ -118,4 +139,4 @@ function validatePoint(reply, elements, opts = {}) {
   return { ok: false, reason: 'unknown target kind', reply: out };
 }
 
-module.exports = { SYSTEM, buildPointRequest, parsePointReply, validatePoint, MAX_ELEMENTS, CONF_SURE };
+module.exports = { SYSTEM, POINT_SCHEMA, buildPointRequest, parsePointReply, validatePoint, MAX_ELEMENTS, CONF_SURE };

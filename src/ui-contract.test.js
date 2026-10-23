@@ -163,11 +163,17 @@ test('all three hide levels exist, with a way back that does not need a hotkey',
   assert.match(panic.slice(0, 300), /setCapturing\(false\)/);
 });
 
-test('the CLI spawn never inherits an API key and errors leave a trail', () => {
+test('every AI call goes to LM Studio on this PC, and errors leave a trail', () => {
   const aiJs = read('src/ai.js');
-  assert.match(aiJs, /delete env\.ANTHROPIC_API_KEY/, 'CLI bills the subscription, never a stray env key');
+  const localJs = read('src/local-llm.js');
+  assert.match(aiJs, /require\('\.\/local-llm'\)/, 'the desktop AI is the LM Studio client');
+  assert.doesNotMatch(aiJs, /api\.anthropic\.com|claude -p|spawn\(/, 'no cloud API and no CLI');
+  assert.match(localJs, /const DEFAULT_BASE_URL = 'http:\/\/127\.0\.0\.1:1234\/v1';/);
   assert.match(aiJs, /ai-errors\.log/, 'AI errors are logged to userData');
   assert.match(appJs, /function aiError\(code,detail\)/, 'error detail reaches the toast');
+  for (const code of ['local_unreachable', 'local_no_model', 'local_no_vision', 'local_context', 'local_timeout']) {
+    assert.match(appJs, new RegExp(code + ":'"), `the renderer explains ${code}`);
+  }
 });
 
 test('the Knot mark state is persisted and restorable from the desktop', () => {
@@ -204,11 +210,12 @@ test('the Companion outlives the dashboard and can be removed from it', () => {
   assert.match(disable.slice(0, 420), /setCapturing\(false\)/);
 });
 
-test('the CLI runs a pinned model, not the user most expensive default', () => {
+test('syllabus reading fits the loaded context and never trusts free-form JSON alone', () => {
   const aiJs = read('src/ai.js');
-  assert.match(aiJs, /'--model', MODEL/, 'the spawn pins the model');
-  assert.match(aiJs, /const MODEL = 'claude-sonnet-5'/, 'and it is the mid-tier one');
-  assert.match(aiJs, /cli_spend_limit/, 'a spend cap is reported as its own fixable case');
+  assert.match(aiJs, /client\.contextFor\(pick\.model\)/, 'chunk size follows the context LM Studio loaded');
+  assert.match(aiJs, /schema: SYLLABUS_SCHEMA, schemaName: 'syllabus'/, 'extraction asks for grammar-constrained JSON');
+  assert.match(aiJs, /if \(result\.error === 'local_context'\) \{ contextError = true; break; \}/, 'a context overflow halves the chunks instead of failing');
+  assert.match(read('src/assistant.js'), /schema: COMMAND_SCHEMA, schemaName: 'command'/, 'Ask-bar commands are schema-constrained too');
 });
 
 test('Gmail works with no connection and never guesses the sending address', () => {
@@ -241,14 +248,16 @@ test('the Companion capsule cannot be clipped by the stack that holds it', () =>
   assert.ok(toolbarMin >= bloomLeft + bloomWidth, `toolbar ${toolbarMin} must cover bloom right edge ${bloomLeft + bloomWidth}`);
 });
 
-test('both API keys are reachable from the desktop app and explained', () => {
+test('LM Studio is set up from one Settings card and explained in the tour', () => {
   const mainJs = read('src/main.js');
-  assert.match(mainJs, /'companion:ai:set-key'/, 'the Companion key is settable from the desktop');
-  assert.match(indexHtml, /id="companion-ai-card"/, 'and has its own Settings card');
+  for (const channel of ['ai:status', 'ai:set-config', 'ai:test', 'ai:test-vision']) assert.match(mainJs, new RegExp(`'${channel}'`));
+  assert.doesNotMatch(mainJs, /'companion:ai:set-key'|'ai:set-key'/, 'there are no keys to set');
+  assert.doesNotMatch(indexHtml, /id="companion-ai-card"/, 'one card for both halves of the app');
+  for (const id of ['ai-url', 'ai-chat', 'ai-vision', 'ai-test', 'ai-test-vision']) assert.match(indexHtml, new RegExp(`id="${id}"`));
   assert.match(indexHtml, /id="rail-storage"/, 'storage shows in the rail');
   const tour = appJs.slice(appJs.indexOf('const tourSteps=['), appJs.indexOf('let focusPicked='));
-  assert.match(tour, /Key 1 of 2/, 'the tour covers the desktop key');
-  assert.match(tour, /Key 2 of 2/, 'and the Companion key');
+  assert.match(tour, /Your AI is LM Studio, on this PC/, 'the tour covers the local AI');
+  assert.doesNotMatch(tour, /Anthropic|Gemini key/, 'and never asks for a cloud key');
   // The label is ${MOD} (Ctrl on Windows, ⌘ on macOS) since the shortcut is CommandOrControl.
   assert.match(tour, /\$\{MOD\}\+Shift\+Space/, 'and the Companion commands');
   assert.match(appJs, /const MOD = IS_MAC \? '⌘' : 'Ctrl'/, 'MOD follows the platform the preload reports');

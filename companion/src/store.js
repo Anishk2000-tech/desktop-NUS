@@ -1,10 +1,11 @@
 // Simple JSON-file settings store (avoids native modules so `npm install` stays clean).
-// Settings hold API keys and the user's résumé, so the file is encrypted at rest
+// Settings hold the LM Studio token (if any) and the user's résumé, so the file is encrypted at rest
 // with the OS keychain (DPAPI on Windows, Keychain on macOS) via safeStorage.
 // Falls back to plaintext only where no system encryption exists (some Linux).
 const fs = require('fs');
 const path = require('path');
 const { app, safeStorage } = require('electron');
+const { DEFAULTS: LOCAL_AI_DEFAULTS } = require('../../src/local-llm');
 
 // Companion settings now live under the desktop app's userData folder.
 // The standalone app kept them in %APPDATA%\jarvis-copilot; the first load
@@ -14,7 +15,8 @@ const FILE = path.join(app.getPath('userData'), 'companion-settings.json');
 const LEGACY_FILE = path.join(app.getPath('appData'), 'jarvis-copilot', 'jarvis-copilot-data.json');
 
 const DEFAULTS = {
-  provider: 'gemini',
+  // Nūs Local Edition has one provider: LM Studio on this PC (src/local-llm.js).
+  provider: 'lmstudio',
   smart: false,
   resumeContext: '',
   // Briefing packs built by the vault's scripts/build_briefing.py. Absolute paths.
@@ -72,14 +74,9 @@ const DEFAULTS = {
   // it off from the desktop Knot pane is the only thing that removes it, and
   // that choice persists until the user turns it back on.
   companionEnabled: true,
-  apiKeys: { openai: '', anthropic: '', gemini: '', nvidia: '' },
-  models: {
-    openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
-    anthropic: { fast: 'claude-haiku-4-5', smart: 'claude-sonnet-5' },
-    // 2026-09-15: gemini-2.5-* returns 404 "no longer available to new users".
-    gemini: { fast: 'gemini-3.6-flash', smart: 'gemini-3.6-pro' },
-    nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' }
-  }
+  // LM Studio server and model choice, shared by the desktop app and the
+  // Companion. Empty model names mean "whatever LM Studio has loaded".
+  local: { ...LOCAL_AI_DEFAULTS },
 };
 
 // Model IDs age out, and a saved settings file beats DEFAULTS on merge (save()
@@ -201,15 +198,9 @@ function load() {
     if (found) { data.packPath = found.pack; data.sparPath = found.spar; }
   }
 
-  // Auto-switch provider if the current one has no key, but another one does.
-  if (!data.apiKeys[data.provider]) {
-    const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia'];
-    const active = validProviders.find(p => data.apiKeys[p]);
-    if (active) {
-      data.provider = active;
-      // We don't save() here so we don't spam disk, it will persist on next save.
-    }
-  }
+  // A settings file from a cloud build names gemini/openai/anthropic/nvidia.
+  // Local Edition only ever talks to LM Studio.
+  data.provider = 'lmstudio';
 
   const retired = retireDeadModels(data);
 

@@ -682,3 +682,12 @@ body.ready .workspace { opacity: 1; transform: none; }
 .onboard-card[data-step="focus"] .onboard-knot { width: 190px; height: 190px; right: 36px; top: 54px; transform: none; }
 .onboard-card.has-knot::after { opacity: .07; }
 .coach-scrim.spotlit { backdrop-filter: none; }
+/* Settings > Local AI (LM Studio). */
+#ai-card .field select { appearance: auto; }
+#ai-card .sheet-actions { flex-wrap: wrap; gap: 10px; }
+#ai-card .sheet-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }
+#ai-card .sheet-actions button { flex: none; }
+#ai-test-result { flex: 1 1 220px; }
+.ai-warn { margin-top: 10px !important; padding: 9px 11px; border-radius: 9px; color: #7a4a12 !important; background: rgba(214,148,48,.12); }
+.ai-advanced { margin-top: 2px; }
+.ai-advanced summary { cursor: pointer; color: #626675; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 10px; }

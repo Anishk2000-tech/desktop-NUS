@@ -1,6 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const crypto = require('crypto');
-const config = require('./config');
+const config = require('./app-config');
 const secrets = require('./secrets');
 
 let client = null;

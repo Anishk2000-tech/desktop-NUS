@@ -24,7 +24,11 @@ test('the default sheet is one verb: guide, plus the composer', () => {
   // No Smart pill and no zoom chrome in the composer.
   assert.doesNotMatch(html, /id="smart-toggle"/);
   assert.doesNotMatch(html, /id="zoom-in-btn"/);
-  assert.match(html, /id="smart-mode"/, 'Smart moved to Settings as a checkbox');
+  // Local Edition: no fast/smart tiers and no keys; the gear picks LM Studio models.
+  assert.doesNotMatch(html, /id="smart-mode"|id="key-gemini"|id="provider-seg"/);
+  assert.match(html, /id="local-url"/);
+  assert.match(html, /id="local-chat"/);
+  assert.match(html, /id="local-vision"/);
 });
 
 test('call and rehearsal tools only exist in context', () => {

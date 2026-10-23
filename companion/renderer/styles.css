@@ -326,6 +326,9 @@ button:focus { outline: none; }
 .shortcut-hint.error { color: #ff9d8f; }
 .shortcut-hint.success { color: #78dba0; }
 .s-status { color: var(--tx-mut); font-size: 12px; margin-top: 10px; min-height: 16px; }
+#local-status { white-space: pre-line; }
+#local-status.ok { color: var(--tx-2); }
+.s-field select { flex: 1; min-width: 0; }
 
 /* ============================ Onboarding / tutorial ============================ */
 #onboard-scrim { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(0,0,0,0.45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }

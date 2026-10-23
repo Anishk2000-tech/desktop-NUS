@@ -63,15 +63,20 @@ test('a question about the selection is answered at the thread tip and can becom
   assert.match(main, /selection = null;\n  if \(wasActive\)/, 'Esc and a Knot click clear the selection');
 });
 
-test('guide steps through the desktop Claude send the screenshot inline, no tools, one turn', () => {
-  const guideInput = fs.readFileSync(path.join(root, '..', 'src', 'guide-input.js'), 'utf8');
+test('guide steps go to the LM Studio vision model with the screenshot inline and a strict JSON schema', () => {
   const desktop = fs.readFileSync(path.join(root, '..', 'src', 'main.js'), 'utf8');
-  assert.match(main, /hooks\.desktopComplete\(prompt, imageDataUrl \|\| null\)/);
-  assert.doesNotMatch(main, /Read that image file first/, 'no file-based screenshot: print mode cannot read outside its cwd');
-  assert.match(desktop, /desktopComplete: \(prompt, imageDataUrl\) => ai\.complete\(prompt, \{ guidance: true, imageDataUrl \}\)/);
-  assert.match(guideInput, /'--tools='/, 'guidance has no filesystem, shell, or browser tools');
-  assert.match(guideInput, /'--strict-mcp-config', '--no-session-persistence', '--setting-sources=', '--effort', 'low'/);
-  assert.doesNotMatch(guideInput, /'--bare'/, 'bare mode skips the keychain and lands signed out');
+  const llm = fs.readFileSync(path.join(root, 'src', 'llm.js'), 'utf8');
+  const session = fs.readFileSync(path.join(root, 'src', 'guide', 'session.js'), 'utf8');
+  // No second AI behind the Companion's back: the Claude CLI fallback is gone.
+  assert.doesNotMatch(main, /desktopComplete/);
+  assert.doesNotMatch(desktop, /desktopComplete/);
+  assert.match(main, /function guideLlm\(\) \{\n  return createLLM\(store\.getSettings\(\)\);\n\}/);
+  // The image rides on the request; a screenshot always means the vision model.
+  assert.match(llm, /imageDataUrl: params\.imageDataUrl \|\| null/);
+  assert.match(session, /schema: POINT_SCHEMA, schemaName: 'point'/);
+  const { POINT_SCHEMA } = require('../src/guide/pointing');
+  assert.deepEqual(POINT_SCHEMA.required, ['instruction', 'target', 'confidence', 'done', 'note']);
+  assert.equal(POINT_SCHEMA.properties.target.anyOf.length, 3, 'element, bbox, or null');
 });
 
 test('a hedged pick is pointed at as a best guess instead of refused', () => {
@@ -80,19 +85,18 @@ test('a hedged pick is pointed at as a best guess instead of refused', () => {
   assert.equal(pointing.CONF_SURE, 0.6);
   assert.match(session, /const sure = hit\.verified && reply\.confidence >= CONF_SURE;/);
   assert.match(session, /verified: sure, source: hit\.source/);
-  const llm = fs.readFileSync(path.join(root, 'src', 'llm.js'), 'utf8');
-  assert.match(llm, /thinkingConfig = \{ thinkingBudget: 0 \}/, 'Gemini Flash thinking off so the JSON budget is not eaten');
-  assert.match(llm, /Math\.max\(Number\(maxTokens\) \|\| 0, 1024\)/);
+  // A reasoning model (gpt-oss) spends tokens thinking before the JSON; the
+  // client adds that budget so a 400-token step never comes back empty.
+  const local = fs.readFileSync(path.join(root, '..', 'src', 'local-llm.js'), 'utf8');
+  assert.match(local, /\+ \(reasoning \? 2048 : 0\)/);
 });
 
-test('NUS_GUIDE_PROVIDER=claude forces guide steps onto Claude Code even with a Companion key', () => {
-  assert.match(main, /const FORCE_CLAUDE_GUIDE = process\.env\.NUS_GUIDE_PROVIDER === 'claude';/);
-  assert.match(main, /if \(own\.ready && !FORCE_CLAUDE_GUIDE\) return own;/);
-});
-
-test('the guide captures at full resolution so a model box lands on the control', () => {
-  assert.match(main, /const GUIDE_CAPTURE_MAXSIDE = Number\(process\.env\.NUS_GUIDE_MAXSIDE\) \|\| 2560;/);
-  assert.match(main, /capture: \(\) => captureDisplay\(store\.getSettings\(\)\.knotDisplayId, \{ maxSide: GUIDE_CAPTURE_MAXSIDE \}\)/);
+test('the guide shrinks screenshots to the Local AI size, and waits as long as LM Studio may', () => {
+  // A local vision model resizes to its own grid; on a 4 GB GPU a smaller frame
+  // is seconds instead of a minute. NUS_GUIDE_MAXSIDE still overrides.
+  assert.match(main, /return Number\(process\.env\.NUS_GUIDE_MAXSIDE\) \|\| localAi\(\)\.getConfig\(\)\.maxImageSide;/);
+  assert.match(main, /capture: \(\) => captureDisplay\(store\.getSettings\(\)\.knotDisplayId, \{ maxSide: guideMaxSide\(\) \}\)/);
+  assert.match(main, /modelTimeoutMs: \(\) => localAi\(\)\.getConfig\(\)\.timeoutSec \* 2000 \+ 30000/);
 });
 
 test('password and card fields are refused locally, by the guide and by select-and-ask', () => {

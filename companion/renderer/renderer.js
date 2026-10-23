@@ -234,9 +234,9 @@
   }
 
   // ---- actions -----------------------------------------------------------
-  // Modes that render without a provider key: guide answers from the local
-  // semester snapshot, numbers and brief come straight from the pack. The key
-  // ask happens inline the first time an AI mode is actually used.
+  // Modes that render without the model: guide answers from the local
+  // semester snapshot, numbers and brief come straight from the pack. Every
+  // other mode first checks that LM Studio is up and has a model loaded.
   const KEYLESS_MODES = new Set(['guide', 'numbers', 'brief']);
 
   async function runMode(mode, text) {
@@ -246,7 +246,7 @@
       // Honest feedback instead of a phantom state flip: the indicator stays
       // where it is and the message says exactly what to do.
       showTiles();
-      showStatus(ready.message || 'Add an API key in Settings to start.');
+      showStatus(ready.message || 'Start LM Studio and load a model to get AI answers.');
       return;
     }
     stopSpeaking();
@@ -592,28 +592,93 @@
   scrim.addEventListener('click', (e) => { if (e.target === scrim) closeSettings(); });
 
   function fillSettings() {
-    document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
-    $('#key-openai').value = settings.apiKeys.openai || '';
-    $('#key-anthropic').value = settings.apiKeys.anthropic || '';
-    $('#key-gemini').value = settings.apiKeys.gemini || '';
-    $('#key-nvidia').value = settings.apiKeys.nvidia || '';
     $('#resume-context').value = settings.resumeContext || '';
     $('#pack-path').value = settings.packPath || '';
     $('#spar-path').value = settings.sparPath || '';
-    $('#smart-mode').checked = !!settings.smart;
     $('#speak-replies').checked = !!settings.speakReplies;
     $('#persist-transcripts').checked = settings.persistTranscripts !== false;
     $('#save-audio').checked = settings.saveAudio === true;
     $('#stealth-mode').checked = settings.stealth === true;
     $('#share-nus-context').checked = !!settings.shareNusContextWithProvider;
     $('#report-to-nus').checked = !!settings.reportToNus;
-    const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     syncAssistShortcutLabels();
-    $('#s-status').textContent = statusText();
+    $('#s-status').textContent = 'Nūs Local Edition · AI: LM Studio · listening: whisper.cpp, both on this PC';
     refreshPackStatus();
     refreshNusContext();
+    refreshLocalAi();
   }
+
+  // ---- Local AI (LM Studio) ------------------------------------------------
+  // The same settings as the desktop Settings > Local AI card: one server,
+  // one chat model, one vision model, shared by the whole app.
+  function fillModelSelect(select, models, saved, autoLabel) {
+    select.innerHTML = '';
+    const auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = autoLabel;
+    select.appendChild(auto);
+    const ids = models.map((m) => m.id);
+    if (saved && !ids.includes(saved)) ids.unshift(saved);
+    for (const id of ids) {
+      const m = models.find((x) => x.id === id);
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = id + (m && m.state === 'loaded' ? ' · loaded' : '') + (m && m.vision ? ' · sees' : '');
+      select.appendChild(opt);
+    }
+    select.value = saved || '';
+  }
+
+  async function refreshLocalAi() {
+    const el = $('#local-status');
+    if (!el || !nus.localStatus) return;
+    el.classList.remove('ok');
+    el.textContent = 'Checking LM Studio…';
+    let st;
+    try { st = await nus.localStatus(); } catch (_) { el.textContent = 'Could not check LM Studio.'; return; }
+    const cfg = st.config || {};
+    $('#local-url').value = st.baseUrl || cfg.baseUrl || '';
+    const models = st.models || [];
+    fillModelSelect($('#local-chat'), models, cfg.chatModel, st.chat ? 'Auto · ' + st.chat.id : 'Auto · the loaded model');
+    fillModelSelect($('#local-vision'), models.filter((m) => m.vision), cfg.visionModel, st.vision ? 'Auto · ' + st.vision.id : 'Auto · a model that can see');
+    const lines = [];
+    if (st.ok) {
+      lines.push('Connected · ' + st.chat.id + (st.chat.contextLength ? ' · ' + st.chat.contextLength + ' context' : ''));
+      lines.push(st.vision ? (st.vision.same ? 'It also reads the screen.' : 'Reads the screen with ' + st.vision.id + '.') : 'No vision model: screen help is off.');
+    } else {
+      lines.push(st.message || 'LM Studio is not answering.');
+    }
+    if (st.warnings && st.warnings.length) lines.push(st.warnings[0]);
+    el.textContent = lines.join('\n');
+    el.classList.toggle('ok', !!st.ok);
+  }
+
+  async function saveLocal(patch) {
+    if (!nus.localSet) return;
+    await nus.localSet(patch);
+    refreshLocalAi();
+  }
+  $('#local-url').addEventListener('change', (e) => saveLocal({ baseUrl: e.target.value.trim() }));
+  $('#local-chat').addEventListener('change', (e) => saveLocal({ chatModel: e.target.value }));
+  $('#local-vision').addEventListener('change', (e) => saveLocal({ visionModel: e.target.value }));
+  $('#local-refresh').addEventListener('click', () => refreshLocalAi());
+  $('#local-test').addEventListener('click', async () => {
+    const out = $('#local-result');
+    const btn = $('#local-test');
+    btn.disabled = true;
+    out.textContent = 'Asking the chat model…';
+    try {
+      const chat = await nus.localTest();
+      if (!chat.ok) { out.textContent = chat.message || chat.detail || 'The model did not answer.'; return; }
+      out.textContent = 'Chat OK (' + (chat.ms / 1000).toFixed(1) + 's). Showing it a picture…';
+      const seen = await nus.localTestVision();
+      out.textContent = 'Chat OK (' + (chat.ms / 1000).toFixed(1) + 's) · ' + (seen.ok ? 'vision OK (' + (seen.ms / 1000).toFixed(1) + 's)' : 'vision: ' + (seen.message || seen.detail || 'failed'));
+    } catch (e) {
+      out.textContent = 'Test failed: ' + (e && e.message ? e.message : e);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   async function refreshNusContext() {
     const el = $('#nus-link-status');
@@ -662,38 +727,16 @@
     settings.resumeContext = '';
     await nus.settingsSet({ resumeContext: '' });
   });
-  function statusText() {
-    const k = settings.apiKeys;
-    const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia'].filter(Boolean);
-    const stt = k.openai ? 'Whisper' : (k.gemini ? 'Gemini' : 'none');
-    const base = 'Active: ' + settings.provider + ' · keys: ' + (has.join(', ') || 'none set') + ' · transcription: ' + stt;
-    return (settings._migrationNote && !has.length) ? settings._migrationNote + '\n' + base : base;
-  }
-  document.querySelectorAll('#provider-seg button').forEach((b) => b.addEventListener('click', () => {
-    settings.provider = b.dataset.provider;
-    document.querySelectorAll('#provider-seg button').forEach((x) => x.classList.toggle('on', x === b));
-    const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
-    $('#s-status').textContent = statusText();
-  }));
   async function saveSettings() {
-    settings.apiKeys.openai = $('#key-openai').value.trim();
-    settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
-    settings.apiKeys.gemini = $('#key-gemini').value.trim();
-    settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
     settings.resumeContext = $('#resume-context').value.trim();
     settings.packPath = $('#pack-path').value.trim();
     settings.sparPath = $('#spar-path').value.trim();
-    settings.smart = $('#smart-mode').checked;
     settings.speakReplies = $('#speak-replies').checked;
     settings.shareNusContextWithProvider = $('#share-nus-context').checked;
     settings.reportToNus = $('#report-to-nus').checked;
     settings.persistTranscripts = $('#persist-transcripts').checked;
     settings.saveAudio = $('#save-audio').checked;
     settings.stealth = $('#stealth-mode').checked;
-    if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
-    settings.models[settings.provider].fast = $('#model-fast').value.trim();
-    settings.models[settings.provider].smart = $('#model-smart').value.trim();
     await nus.settingsSet(settings);
     syncRehearsalCluster();
   }
@@ -855,7 +898,7 @@
       state: 'ready',
       title: 'Three hotkeys, anywhere',
       target: '#knot-bloom',
-      body: () => `<ul><li>${shortcutKeycapsHtml(assistShortcut, 'kbd')}: <strong>What should I do?</strong> from anywhere</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">⇧</span> <span class="kbd">Space</span>: hide or show the Companion</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">⇧</span> <span class="kbd">X</span>: stop listening and vanish</li></ul>Type in the box for anything else. AI answers and listening need a free Gemini key (<span class="hl">aistudio.google.com/apikey</span>); I will ask for it the first time it is actually needed, and it also lives in the gear icon.`
+      body: () => `<ul><li>${shortcutKeycapsHtml(assistShortcut, 'kbd')}: <strong>What should I do?</strong> from anywhere</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">⇧</span> <span class="kbd">Space</span>: hide or show the Companion</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">⇧</span> <span class="kbd">X</span>: stop listening and vanish</li></ul>Type in the box for anything else. AI answers come from <span class="hl">LM Studio on this PC</span> (no keys, nothing leaves the machine); the gear icon picks the model. Listening uses the local speech engine from the desktop voice setup.`
     },
     {
       state: 'idle',
@@ -1219,8 +1262,8 @@ function createPreviewBridge() {
   document.documentElement.classList.add('preview-mode');
   const listeners = new Map();
   const settings = {
-    provider: 'gemini', apiKeys: { openai: '', anthropic: '', gemini: '', nvidia: '' },
-    models: { gemini: { fast: 'gemini-3.6-flash', smart: 'gemini-3.6-pro' } },
+    provider: 'lmstudio',
+    local: { baseUrl: 'http://127.0.0.1:1234/v1', chatModel: '', visionModel: '' },
     shortcuts: { assist: 'CommandOrControl+Return' }, smart: false, onboarded: true,
     resumeContext: '', packPath: '', sparPath: '', speakReplies: false, shareNusContextWithProvider: false,
     _founderTools: false,
@@ -1239,6 +1282,11 @@ function createPreviewBridge() {
     ask: () => {}, micPcm: () => {}, systemPcm: () => {}, setIgnoreMouse: () => {}, openPane: () => {}, log: () => {},
     guideAsk: () => {}, guideDismiss: () => {}, guideKeep: () => {}, guideSkip: () => {}, strandArrived: () => {},
     knotCornerSet: async () => true,
+    aiReady: async () => ({ ok: true }),
+    localStatus: async () => ({ ok: true, baseUrl: 'http://127.0.0.1:1234/v1', config: settings.local, models: [{ id: 'google/gemma-4-12b', state: 'loaded', vision: true }], chat: { id: 'google/gemma-4-12b', contextLength: 16384 }, vision: { id: 'google/gemma-4-12b', same: true }, warnings: [] }),
+    localSet: async (patch) => Object.assign(settings.local, patch),
+    localTest: async () => ({ ok: true, ms: 900 }),
+    localTestVision: async () => ({ ok: true, ms: 2100 }),
     getZoomLevel: () => 0,
     on: (channel, callback) => listeners.set(channel, callback),
   };

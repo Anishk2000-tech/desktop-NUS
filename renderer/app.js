@@ -161,7 +161,7 @@ railMenu?.addEventListener('click', async (event) => {
   const item = event.target.closest('[data-menu]'); if (!item) return;
   closeRailMenu();
   if (item.dataset.menu === 'signout') { $('#auth-logout')?.click(); return; }
-  focusSettingsCard(item.dataset.menu === 'plan' ? 'license-card' : 'auth-card');
+  focusSettingsCard(item.dataset.menu === 'plan' ? 'license-card' : item.dataset.menu === 'ai' ? 'ai-card' : 'auth-card');
 });
 document.addEventListener('click', (event) => { if (!event.target.closest('.rail-profile') && !event.target.closest('#rail-menu')) closeRailMenu(); });
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeRailMenu(); });
@@ -451,7 +451,7 @@ $('#memory-list').addEventListener('click', async (event) => {
   button.disabled = true; button.textContent = 'Reading…';
   const result = await api.syllabusExtract(Number(button.dataset.extractSource));
   button.disabled = false;
-  if (result.error === 'no_ai') { showToast(aiError('no_ai')); setView('settings'); return; }
+  if (needsAiSetup(result.error)) { state.pendingSourceId=result.sourceId||Number(button.dataset.extractSource)||null; showToast(aiError(result.error)); focusSettingsCard('ai-card'); return; }
   if (result.error) { button.textContent = 'Read with AI: extract courses & deadlines'; reportAiError(result); return; }
   openReview(result.data, result.fileName, result.sourceId);
 });
@@ -518,9 +518,13 @@ async function importDefault(){const result=await api.importSource('calendar_fil
 $('#import-primary').addEventListener('click',importSyllabusFlow);
 $('#source-import').addEventListener('click',()=>setView('integrations'));
 
-const AI_ERRORS={no_ai:'Connect an AI provider first. Taking you to Settings.',empty_text:'No readable text in that file. Scanned PDFs need selectable text.',bad_json:'The AI reply was not readable. Try the import again.',read_failed:'Could not read that file.',storage_limit:'Nūs local storage is full. Remove an import before adding another.',limit_syllabus_imports:'Free includes three AI syllabus imports. Upgrade to Pro for more.',limit_questions:'Free includes ten Ask or chat questions each day. Upgrade to Pro or come back tomorrow.',limit_connected_accounts:'Free includes one connected account. Disconnect the current account or upgrade to Pro.',limit_automation_rules:'Free includes one automation rule. Remove it or upgrade to Pro.',limit_companion_minutes:'Free Companion listening is used for today. Upgrade to Pro or come back tomorrow.',limit_companion_history:'Free includes seven days of Companion history. Upgrade to Pro for full history.',cli_timeout:'Claude Code took too long. Try again.',cli_failed:'Claude Code returned an error.',cli_spend_limit:'Your Claude subscription hit its spend limit. Add an Anthropic API key in Settings, or raise the limit in Claude Code.',cli_not_logged_in:'Claude Code is installed but signed out. Open a terminal, run "claude", then /login, or paste an Anthropic API key in Settings.',cli_spawn_failed:'Claude Code could not start.',api_failed:'The Anthropic API returned an error.',api_refused:'The AI declined this content.',api_timeout:'The API call timed out. Try again.',api_network:'Network problem reaching Anthropic.',unexpected_reply:'The provider answered, but not as expected.',source_missing:'That import is no longer on file.',course_name_required:'The course needs a name.',target_not_found:'I could not find that item. Try its exact name.',incomplete_command:'I need a bit more: which item, and what date?',unknown_intent:'That request did not survive the trip. Try again.'};
+// Nūs Local Edition: every AI call goes to LM Studio on this PC.
+const LOCAL_EDITION=true;
+const AI_ERRORS={no_ai:'Set up LM Studio first. Taking you to Settings.',empty_text:'No readable text in that file. Scanned PDFs need selectable text.',bad_json:'The AI reply was not readable. Try the import again.',read_failed:'Could not read that file.',storage_limit:'Nūs local storage is full. Remove an import before adding another.',limit_syllabus_imports:'Free includes three AI syllabus imports. Upgrade to Pro for more.',limit_questions:'Free includes ten Ask or chat questions each day. Upgrade to Pro or come back tomorrow.',limit_connected_accounts:'Free includes one connected account. Disconnect the current account or upgrade to Pro.',limit_automation_rules:'Free includes one automation rule. Remove it or upgrade to Pro.',limit_companion_minutes:'Free Companion listening is used for today. Upgrade to Pro or come back tomorrow.',limit_companion_history:'Free includes seven days of Companion history. Upgrade to Pro for full history.',local_unreachable:'LM Studio is not running. Open LM Studio, load a model, and switch the server on in the Developer tab. Taking you to Settings.',local_no_model:'LM Studio is running but no model is loaded. Load Gemma 4 (or another model) in LM Studio.',local_no_vision:'That needs a model that can see. Load Gemma 4 in LM Studio, or pick a vision model in Settings, Local AI.',local_context:'Too long for the model\'s context length. In LM Studio, reload the model with Context Length 16384 and try again.',local_load_failed:'LM Studio could not load the model (usually not enough memory). Close other apps or lower GPU offload.',local_timeout:'The local model took too long. Try again, or raise the wait limit in Settings, Local AI.',local_empty:'The model thought for its whole budget and said nothing. Ask again.',local_failed:'LM Studio returned an error.',local_cancelled:'Stopped.',unexpected_reply:'The model answered, but not as expected.',source_missing:'That import is no longer on file.',course_name_required:'The course needs a name.',target_not_found:'I could not find that item. Try its exact name.',incomplete_command:'I need a bit more: which item, and what date?',unknown_intent:'That request did not survive the trip. Try again.'};
 Object.assign(AI_ERRORS, { voice_setup_required:'Complete voice setup in Nūs before recording.', capture_finalizing:'Nūs is saving the last words. Please wait a moment.', companion_busy:'Finish your guide or voice question before recording.' });
-function aiError(code,detail){const base=AI_ERRORS[code]||`Request failed (${code}).`;return detail?`${base} (${String(detail).slice(0,120)})`:base;}
+function aiError(code,detail){const base=AI_ERRORS[code]||`Request failed (${code}).`;return detail&&(code==='local_failed'||!AI_ERRORS[code])?`${base} (${String(detail).slice(0,120)})`:base;}
+// The errors only fixed in LM Studio itself: send the student to the Local AI card.
+function needsAiSetup(code){return code==='no_ai'||code==='local_unreachable'||code==='local_no_model';}
 
 // Multi-file import: the picker allows several syllabi at once. The first is
 // extracted immediately; the rest wait in state.importQueue and run one review
@@ -532,7 +536,7 @@ async function importSyllabusFlow(givenPath){
   const result=await api.syllabusImport(filePath);
   if(!result||result.canceled)return;
   if(result.remaining&&result.remaining.length)state.importQueue=[...(state.importQueue||[]),...result.remaining];
-  if(result.error==='no_ai'||result.error==='cli_not_logged_in'){state.importQueue=[];state.pendingSourceId=result.sourceId||null;showToast(aiError(result.error));setView('settings');return;}
+  if(needsAiSetup(result.error)){state.importQueue=[];state.pendingSourceId=result.sourceId||null;showToast(aiError(result.error));focusSettingsCard('ai-card');return;}
   if(result.error){reportAiError(result);nextQueuedImport();return;}
   openReview(result.data,result.fileName,result.sourceId);
 }
@@ -610,53 +614,105 @@ $('#gpa-scale-card').addEventListener('click',async(event)=>{
 });
 $('#gpa-preset').addEventListener('change',(event)=>{const preset=GPA_PRESETS[event.target.value];if(!preset)return;state.gpaScale=preset.map(([min,letter,points])=>({min,letter,points}));renderGpaScale();event.target.value='';});
 
+// Settings > Local AI: the LM Studio server, the chat and vision models, and
+// two tests. The same settings the Knot's gear edits.
+function fillModelSelect(select,models,saved,autoLabel){
+  select.innerHTML='';
+  const ids=models.map((m)=>m.id);
+  if(saved&&!ids.includes(saved))ids.unshift(saved);
+  const options=[`<option value="">${esc(autoLabel)}</option>`].concat(ids.map((id)=>{const m=models.find((x)=>x.id===id);return`<option value="${esc(id)}">${esc(id)}${m&&m.state==='loaded'?' · loaded':''}${m&&m.vision?' · sees':''}${m?'':' · not in LM Studio'}</option>`;}));
+  select.innerHTML=options.join('');
+  select.value=saved||'';
+}
+let aiStatusCache=null;
 async function renderAiState(){
-  const status=await api.aiStatus();
   const badge=$('#ai-badge');
-  const form=$('#ai-key-form');
-  // The key form stays available even when the CLI is present: an installed but
-  // signed-out CLI would otherwise leave the user with no way to configure AI.
-  form.classList.remove('hidden');
-  $('#ai-key-clear').classList.toggle('hidden',!status.apiKey);
-  if(status.cli){
-    $('#ai-title').textContent=status.apiKey?'Claude Code detected (API key as backup)':'Claude Code detected';
-    $('#ai-copy').textContent='Syllabus reading runs through your Claude Code subscription. If Claude Code is signed out, run "claude" in a terminal and use /login, or paste an Anthropic API key below as a fallback.';
+  const status=await api.aiStatus().catch(()=>null);
+  if(!status){badge.textContent='Error';return;}
+  aiStatusCache=status;
+  const cfg=status.config||{};
+  if(document.activeElement!==$('#ai-url'))$('#ai-url').value=status.baseUrl||cfg.baseUrl||'';
+  $('#ai-timeout').value=cfg.timeoutSec||300;
+  $('#ai-image').value=cfg.maxImageSide||1280;
+  $('#ai-context').value=cfg.contextLength||0;
+  $('#ai-token').placeholder=cfg.hasApiKey?'Saved (type to replace)':'Leave empty';
+  const models=status.models||[];
+  fillModelSelect($('#ai-chat'),models,cfg.chatModel,status.chat?`Auto · ${status.chat.id}`:'Auto · the loaded model');
+  fillModelSelect($('#ai-vision'),models.filter((m)=>m.vision),cfg.visionModel,status.vision?`Auto · ${status.vision.id}`:'Auto · a model that can see');
+  const warn=$('#ai-warn');
+  const warnings=status.warnings||[];
+  warn.textContent=warnings.join(' ');
+  warn.classList.toggle('hidden',!warnings.length);
+  if(status.ok){
+    $('#ai-title').textContent=`Connected · ${status.chat.id}`;
+    const ctx=status.chat.contextLength?` Loaded with a ${status.chat.contextLength.toLocaleString()}-token context.`:'';
+    const sees=status.vision?(status.vision.same?' It also reads your screen for the Companion.':` Screen reading uses ${status.vision.id}.`):' No vision model, so the Companion cannot read the screen yet.';
+    $('#ai-copy').textContent=`Syllabus reading, the Ask bar, chat and voice answers run on this model in LM Studio.${ctx}${sees} Nothing leaves this PC.`;
     badge.textContent='Ready';badge.classList.add('good');
-  }else if(status.apiKey){
-    $('#ai-title').textContent='Anthropic API key saved';
-    $('#ai-copy').textContent='The key is encrypted on this device and used only when you import a syllabus.';
-    badge.textContent='Ready';badge.classList.add('good');
+  }else if(status.reachable){
+    $('#ai-title').textContent='LM Studio is running, but no model is loaded';
+    $('#ai-copy').textContent='In LM Studio, open the Developer tab and load a model (Gemma 4 12B reads text and screenshots), then press Refresh.';
+    badge.textContent='No model';badge.classList.remove('good');
   }else{
-    $('#ai-title').textContent='Connect an AI to read syllabi';
-    $('#ai-copy').textContent='Install Claude Code (detected automatically), or paste an Anthropic API key. Without one, imports still work for calendar .ics files.';
-    badge.textContent='Not set';badge.classList.remove('good');
+    $('#ai-title').textContent='LM Studio is not answering';
+    $('#ai-copy').textContent=`Nothing answered at ${status.baseUrl}. Open LM Studio, go to the Developer tab, load a model and switch the server to Running, then press Refresh. If you changed LM Studio's port, put the new address below.`;
+    badge.textContent='Offline';badge.classList.remove('good');
   }
 }
-$('#ai-key-save').addEventListener('click',async()=>{
-  const value=$('#ai-key').value;
-  $('#ai-key').value='';
-  if(!value.trim())return showToast('Paste a key first.');
-  const result=await api.aiSetKey(value);
-  if(result.error)return showToast('That key looks empty.');
-  $('#ai-test-result').textContent='Key saved.';
+async function retryPendingImport(){
+  if(!state.pendingSourceId)return;
+  const sourceId=state.pendingSourceId;
+  state.pendingSourceId=null;
+  showToast('LM Studio is ready. Reading the syllabus you imported…');
+  const retry=await api.syllabusExtract(sourceId);
+  if(!retry.error)openReview(retry.data,retry.fileName,retry.sourceId);
+  else reportAiError(retry);
+}
+async function saveAiSettings(extra){
+  const patch={
+    baseUrl:$('#ai-url').value.trim(),
+    chatModel:$('#ai-chat').value,
+    visionModel:$('#ai-vision').value,
+    timeoutSec:Number($('#ai-timeout').value)||300,
+    maxImageSide:Number($('#ai-image').value)||1280,
+    contextLength:Number($('#ai-context').value)||0,
+    ...(extra||{}),
+  };
+  const token=$('#ai-token').value.trim();
+  if(token)patch.apiKey=token;
+  $('#ai-token').value='';
+  await api.aiSetConfig(patch);
   await renderAiState();
-  if(state.pendingSourceId){
-    const retry=await api.syllabusExtract(state.pendingSourceId);
-    state.pendingSourceId=null;
-    if(!retry.error)openReview(retry.data,retry.fileName,retry.sourceId);
-  }
+}
+$('#ai-save').addEventListener('click',async()=>{
+  const button=$('#ai-save');button.disabled=true;
+  try{await saveAiSettings();$('#ai-test-result').textContent=aiStatusCache?.ok?'Saved. LM Studio answered.':'Saved.';if(aiStatusCache?.ok)retryPendingImport();}
+  finally{button.disabled=false;}
+});
+$('#ai-chat').addEventListener('change',()=>saveAiSettings());
+$('#ai-vision').addEventListener('change',()=>saveAiSettings());
+$('#ai-refresh').addEventListener('click',async()=>{
+  $('#ai-test-result').textContent='Checking LM Studio…';
+  await renderAiState();
+  $('#ai-test-result').textContent=aiStatusCache?.ok?'LM Studio answered.':'';
+  if(aiStatusCache?.ok)retryPendingImport();
 });
 $('#ai-test').addEventListener('click',async()=>{
   const button=$('#ai-test');
-  button.disabled=true;$('#ai-test-result').textContent='Testing…';
+  button.disabled=true;$('#ai-test-result').textContent='Asking the chat model… (the first answer after loading can take a while)';
+  await saveAiSettings(); // test what is on screen, not what was saved before
   const result=await api.aiTest();
   button.disabled=false;
-  $('#ai-test-result').textContent=result.ok?'Provider answered. You are set.':aiError(result.error,result.detail);
+  $('#ai-test-result').textContent=result.ok?`${result.model} answered in ${(result.ms/1000).toFixed(1)}s. You are set.`:(result.message||aiError(result.error,result.detail));
+  if(result.ok)retryPendingImport();
 });
-$('#ai-key-clear').addEventListener('click',async()=>{
-  await api.aiClearKey();
-  $('#ai-test-result').textContent='Key removed.';
-  renderAiState();
+$('#ai-test-vision').addEventListener('click',async()=>{
+  const button=$('#ai-test-vision');
+  button.disabled=true;$('#ai-test-result').textContent='Showing the vision model a red square…';
+  await saveAiSettings();
+  const result=await api.aiTestVision();
+  button.disabled=false;
+  $('#ai-test-result').textContent=result.ok?`${result.model} saw it (${(result.ms/1000).toFixed(1)}s). Screen guidance will work.`:(result.message||aiError(result.error,result.detail));
 });
 
 function renderAutomations() {
@@ -904,35 +960,9 @@ async function renderSettings(){
   renderAuthState();
   renderSyncState();
   renderAiState();
-  renderCompanionAiState();
   renderGpaScale();
   renderStorage();
 }
-
-// The Companion's provider key, managed from the desktop so the overlay is
-// usable without hunting for its gear icon.
-async function renderCompanionAiState(){
-  const badge=$('#companion-ai-badge'); if(!badge)return;
-  const status=await api.companionAiStatus?.().catch(()=>null);
-  const has=Boolean(status?.keys?.gemini||status?.keys?.openai);
-  badge.textContent=has?'Key saved':'Desktop fallback';
-  badge.classList.toggle('good',has);
-  $('#companion-ai-title').textContent=has?'Companion provider configured':'Screen guidance can use desktop Claude';
-  $('#companion-ai-clear')?.classList.toggle('hidden',!status?.keys?.gemini);
-}
-$('#companion-ai-save')?.addEventListener('click',async()=>{
-  const input=$('#companion-ai-key'); const key=(input.value||'').trim();
-  if(!key){$('#companion-ai-result').textContent='Paste a key first.';return;}
-  const result=await api.companionAiSetKey({provider:'gemini',key});
-  input.value='';
-  $('#companion-ai-result').textContent=result?.error?'That key was not accepted.':'Saved. The Knot can answer now.';
-  renderCompanionAiState();
-});
-$('#companion-ai-clear')?.addEventListener('click',async()=>{
-  await api.companionAiClearKey('gemini');
-  $('#companion-ai-result').textContent='Key removed.';
-  renderCompanionAiState();
-});
 
 // Settings sidebar: each link scrolls its card into view and lights up.
 $$('.settings-link').forEach((link)=>link.addEventListener('click',()=>{
@@ -953,7 +983,7 @@ async function renderStorage(){
   $('#rail-storage')?.classList.toggle('full',pct>80);
   if(!$('#storage-title'))return;
   $('#storage-title').textContent=`${formatBytes(used)} of ${formatBytes(status.capBytes)} local space`;
-  $('#storage-copy').textContent=`Database ${formatBytes(status.dbBytes)}, of which imported source text is ${formatBytes(status.sourceBytes)}. These files are stored on this device. AI features may send relevant content to your configured provider.`;
+  $('#storage-copy').textContent=`Database ${formatBytes(status.dbBytes)}, of which imported source text is ${formatBytes(status.sourceBytes)}. These files are stored on this device, and AI runs in LM Studio on this PC.`;
   $('#storage-bar').style.width=`${Math.max(pct,1)}%`;
   const badge=$('#storage-badge');
   if(pct>80){badge.textContent='Nearly full';badge.classList.remove('good');}
@@ -987,11 +1017,11 @@ async function renderAuthState() {
     $('#auth-badge').classList.remove('good');
     $('#rail-name').textContent = 'You';
     $('#rail-avatar').textContent = 'N';
-    $('#rail-mode').firstChild.textContent = 'Local profile';
+    $('#rail-mode').firstChild.textContent = LOCAL_EDITION ? 'Local Edition' : 'Local profile';
     $('#rail-plan')?.classList.add('hidden');
     $('#rail-signout')?.classList.add('hidden');
     $('#settings-name').textContent = 'Local';
-    $('#settings-email').textContent = 'Not signed in';
+    $('#settings-email').textContent = LOCAL_EDITION ? 'Local Edition · LM Studio' : 'Not signed in';
     if (!authConfig.supabase) {
       $('#auth-form').classList.add('hidden');
     }
@@ -1024,7 +1054,7 @@ async function renderLicenseState(nextState) {
   $('#license-badge').classList.toggle('good', pro);
   $('#license-upgrade').classList.toggle('hidden', pro);
   $('#license-portal').classList.toggle('hidden', !pro);
-  $('#rail-plan')?.classList.toggle('hidden', !pro);
+  $('#rail-plan')?.classList.toggle('hidden', !pro || plan.plan === 'local');
   if (pro) {
     const ends = plan.currentPeriodEnd ? new Date(plan.currentPeriodEnd).toLocaleDateString(undefined, { month: 'long', day: 'numeric' }) : null;
     $('#license-copy').textContent = plan.cancelAtPeriodEnd && ends
@@ -1515,8 +1545,8 @@ const APP_GUIDE=[
   {match:/close|quit|exit|background|still running|stays open/,go:'companion',label:'Open Knot settings',answer:'Closing the dashboard leaves the Companion running on your desktop with every hotkey live, the same way it works after a restart. The tray icon reopens the dashboard or quits Nūs entirely, and Turn off Companion on this pane removes the overlay for good.'},
   {match:/stealth|invisible|hide.*(companion|overlay|knot)/,go:'companion',label:'Open Knot settings',answer:`${MOD}+Shift+Space hides the whole Companion, ${MOD}+Shift+X stops listening and vanishes. The Knot mark alone can be hidden or shown from this pane, and this pane is always the way back.`},
   {match:/history|transcript|recording|session/,go:'history',label:'Open History',answer:'Every Companion capture session lands under Knot > History: full transcript, search, and upload into your Jarvis vault with a preview before anything is written.'},
-  {match:/gemini|companion.*(key|api)|key.*companion|overlay.*key/,go:'settings',label:'Open Settings',answer:'Screen guidance can use desktop Claude when no Companion key is set. The Companion AI key card in Settings adds Gemini for Companion answers and cloud speech fallback. For keyless voice, click Talk on the Knot and complete local voice setup.'},
-  {match:/api key|anthropic|claude key|which model/,go:'settings',label:'Open Settings',answer:'Two keys, two jobs. Desktop app: Claude, found automatically if Claude Code is installed, otherwise an Anthropic API key in Settings > AI provider. It runs on Sonnet so syllabus reading stays affordable. Companion overlay: its own Gemini key in the Companion AI key card just below.'},
+  {match:/lm ?studio|gemma|gpt-?oss|local (ai|model|llm)|which model|api key|\bkeys?\b|gemini|claude|anthropic|openai/,go:'settings',label:'Open Local AI settings',answer:'This is Nūs Local Edition: no API keys. Everything, the desktop app and the Companion, runs on LM Studio on this PC. Settings > Local AI picks the server (http://127.0.0.1:1234 by default), the chat model and the vision model, and has Test chat and Test vision buttons. Gemma 4 does both chat and screen reading; a text-only model like gpt-oss needs a vision model beside it for the Companion.'},
+  {match:/voice|whisper|microphone|speech|listen/,go:'today',label:'Open Today',answer:'Voice runs on this PC: click the Knot on Today and Nūs offers a one-time download of the Whisper speech model. After that, speech is transcribed locally and answered by your LM Studio model.'},
   {match:/gmail/,go:'email',label:'Open Email',answer:'Gmail needs no connection: draft the email in the Email tab, then press Open in Gmail. The finished draft opens in a Gmail compose window in your browser with everything filled in, and you press send there.'},
   {match:/email|professor|outlook/,go:'email',label:'Open Email',answer:'Email has its own tab in the rail. Connect Outlook read-only for the inbox brief and your writing style; the professor drafter works even without connecting, and any draft can open straight into Gmail with the Open in Gmail button.'},
   {match:/dashboard|home page|main page|back to today/,go:'today',label:'Open Today',answer:'The dashboard is the Today tab, item 01 in the rail. If the app window is closed, the tray icon has Open Nūs dashboard.'},
@@ -2052,11 +2082,11 @@ function renderVoiceSetup(status){
   const noBinary=!status||!status.binary;
   thread.innerHTML=`<div class="voice-setup">
     <strong>Set up free local voice</strong>
-    <span>Nūs transcribes speech on this computer with an open source Whisper model. This local engine transcribes on this device. The Companion can also use a configured cloud speech provider as fallback.</span>
+    <span>Nūs transcribes speech on this computer with an open source Whisper model, and your LM Studio model answers. No audio leaves this PC.</span>
     ${noBinary
       ?(IS_MAC
         ?'<span>Local voice is not bundled on macOS. Companion speech needs a configured provider, and verified screen pointing is unavailable there.</span>'
-        :'<span>The voice engine is missing from this build. Install a complete Nūs build, or configure a speech provider in Companion Settings.</span>')
+        :'<span>The voice engine is missing from this build. From source, run <b>npm run setup:voice</b> once (setup-windows.bat does it), then restart Nūs.</span>')
       :'<button id="voice-setup-go" class="primary-button" type="button">Download voice model (57 MB)</button>'}
     <small id="voice-setup-status"></small>
   </div>`;
@@ -2209,7 +2239,7 @@ async function submitToNus(text){
   state.busy=true;renderHero();
   try{
     const result=await api.assistantParse(text);
-    if(result.error==='no_ai'||result.error==='cli_not_logged_in'){answerLocally(text);showToast(aiError(result.error));return;}
+    if(needsAiSetup(result.error)){answerLocally(text);showToast(aiError(result.error));return;}
     if(result.error){reportAiError(result);return;}
     const proposal=result.proposal;
     if(!proposal.needs_confirm){await answerWithAi(proposal.command.question||text,askAnswer);return;}
@@ -2321,11 +2351,10 @@ const tourSteps=[
   {view:'sources',rail:'semester',title:'Knowledge is what Nūs has read',body:'Under Semester, next to the overview. Courses, unfiled items, and raw imports each keep their own count, so you always know what Nūs read versus what you handed it.'},
   {view:'companion',rail:'companion',title:'The Knot rides on top of everything',body:`The Nūs Knot floats over your screen, answers "What should I do?" from your real semester, and listens when you ask it to. ${MOD}+Shift+Space hides it, ${MOD}+Shift+X stops and vanishes in one stroke.`,action:{label:'Show me the Knot',run:async()=>{await api.companionControl?.('tour');}}},
   {view:'history',rail:'companion',title:'Every session is kept',body:'Transcripts from the Companion land here, searchable, with the briefing pack that was live at the time. Any session can be uploaded into your Jarvis vault as a note, and you see the exact markdown before it is written.'},
-  {view:'settings',rail:'settings',title:'Settings is where the wiring lives',body:'Your two AI keys, email and calendar connections, Companion options, and your school\'s GPA scale all live here. The next three steps cover the ones you actually have to do.'},
-  {view:'settings',rail:'settings',title:'Key 1 of 2: Claude, for the desktop app',body:'The AI provider card on this page. Claude reads your syllabi and powers the Ask bar and the chat thread. If Claude Code is installed on this machine, Nūs finds it automatically and there is nothing to paste. If not, put an Anthropic API key in that card. It is encrypted on this device and only ever used to call Anthropic.'},
-  {view:'settings',rail:'settings',title:'Key 2 of 2: Gemini, for the Companion',body:'The Companion AI key card, right below the AI provider one. The floating Knot is a separate agent: it sees your screen and listens, so it runs on its own provider to stay fast and cheap. Paste a Google Gemini key there (the free tier at aistudio.google.com/apikey is enough) and the Knot starts answering with AI. Even without it, "What should I do?" answers from your semester on this machine. The Knot\'s own gear icon sets the same key if you prefer.'},
+  {view:'settings',rail:'settings',title:'Settings is where the wiring lives',body:'Your local AI, email and calendar connections, Companion options, and your school\'s GPA scale all live here. The next two steps cover the ones you actually have to do.'},
+  {view:'settings',rail:'settings',title:'Your AI is LM Studio, on this PC',body:'The Local AI card at the top of this page. Nūs Local Edition has no keys and no account: syllabus reading, the Ask bar, chat, voice answers and the Companion all run on the model you load in LM Studio. Start LM Studio, load Gemma 4 (it reads text and screenshots), switch the server on in the Developer tab, then press Test chat and Test vision here.'},
   {view:'settings',rail:'settings',title:'Fix your GPA scale',body:'Scroll to the GPA scale card, or click Data in the left column. Every school maps percentages to letters differently, so match that table to your syllabus or the registrar once. Semester setup and every GPA projection read from it, and Nūs never guesses a missing row.'},
-  {view:'companion',rail:'companion',title:'Driving the Companion',action:{label:'Show me the Knot',run:()=>{api.companionControl?.('tour');}},body:`On screen: click the Knot, then press "What should I do?" or type anything. ${MOD}+Enter asks from anywhere, even with no key set. ${MOD}+Shift+Space hides or shows it, ${MOD}+Shift+X stops listening and vanishes. It keeps running with the hotkeys live after you close this dashboard, and the ${IS_MAC?'menu bar':'tray'} icon brings the dashboard back. Turn off Companion on this pane removes it entirely.`},
+  {view:'companion',rail:'companion',title:'Driving the Companion',action:{label:'Show me the Knot',run:()=>{api.companionControl?.('tour');}},body:`On screen: click the Knot, then press "What should I do?" or type anything. ${MOD}+Enter asks from anywhere, even while LM Studio is closed. ${MOD}+Shift+Space hides or shows it, ${MOD}+Shift+X stops listening and vanishes. It keeps running with the hotkeys live after you close this dashboard, and the ${IS_MAC?'menu bar':'tray'} icon brings the dashboard back. Turn off Companion on this pane removes it entirely.`},
   {view:'today',rail:null,title:'You are set',body:'That is the tour. Anything you import lands in a review table before it is saved, so nothing enters your semester without you seeing it. You can replay this walkthrough any time from Settings.',done:true},
 ];
 
@@ -2337,7 +2366,7 @@ let onboardStep = 'focus';
 // The plain first-run notice with the switch right there (TELEMETRY-CONTRACT.md).
 // Rendered on whichever onboarding screen comes first, once per fresh install.
 function statsNoticeHtml(){
-  if(!api.statsStatus)return '';
+  if(LOCAL_EDITION||!api.statsStatus)return '';
   const on=statsState?Boolean(statsState.enabled):true;
   return `<label class="onboard-stats"><span class="switch"><input id="ob-stats-toggle" type="checkbox"${on?' checked':''} /><span class="slider"></span></span><span>Nūs sends anonymous usage stats (which features get used, never your coursework or what you type). Turn off in Settings.</span></label>`;
 }
@@ -2600,7 +2629,7 @@ start().catch((error)=>{console.error(error);showToast('Nūs could not read the 
 function createPreviewApi(){
   const today=isoDay(),plus=(days)=>{const d=new Date();d.setDate(d.getDate()+days);return isoDay(d);};
   const data={courses:[{id:1,name:'Linear Algebra',code:'MATH 2418',credit_hours:4},{id:2,name:'Computer Science II',code:'COSC 1437',credit_hours:4}],assignments:[{id:1,course_id:1,title:'Matrix transformations set',due_date:plus(1),status:'pending'},{id:2,course_id:2,title:'Linked list lab',due_date:plus(3),status:'pending'}],tasks:[{id:1,title:'Study for linear algebra midterm',course_name:'Linear Algebra',due_date:plus(5),done:0,estimated_minutes:100,steps:[{id:1,title:'Collect the exact topics and materials',done:1,estimated_minutes:20},{id:2,title:'Run a quick diagnostic without notes',done:0,estimated_minutes:20},{id:3,title:'Review the weakest two topics',done:0,estimated_minutes:20},{id:4,title:'Complete a timed practice pass',done:0,estimated_minutes:20},{id:5,title:'Write the one-page final review sheet',done:0,estimated_minutes:20}]}],sources:[{id:1,title:'Fall 2026 calendar.ics',source_type:'calendar_file'}],integrations:[['calendar_file','Calendar file','connected','12 events imported locally.'],['google_calendar','Google Calendar','needs_credentials','OAuth client ID required before live sync can be enabled.'],['canvas','Canvas','needs_credentials','Requires your school Canvas domain and an approved OAuth client.'],['blackboard','Blackboard','needs_admin','Requires an Anthology app registration and campus approval.'],['chatgpt_export','ChatGPT history','ready','Import an exported JSON or HTML archive locally.'],['claude_export','Claude history','ready','Import exported JSON, HTML, Markdown, or text locally.'],['google_docs','Google Docs','ready','Import downloaded Docs as PDF, DOCX, Markdown, or text.'],['icloud_notes','iCloud Notes','ready','Import exported notes as HTML, Markdown, or text.']].map(([provider,label,status,detail])=>({provider,label,status,detail})),automations:[{id:1,name:'Weekly calculus review',trigger_type:'weekly',enabled:1,run_count:2}],repeated_signals:[{recurrence_key:'weekly review',occurrences:3,example_title:'Weekly chapter review'}],preferences:{onboarded:true},activity:[{id:2,action_type:'assistant_reschedule',summary:'Assignment 3 due date updated',detail:'Changed in memory and Calendar using your Linear Algebra syllabus context.',status:'done',created_at:new Date(Date.now()-1800000).toISOString()},{id:1,action_type:'assistant_draft',summary:'Professor absence email drafted',detail:'Used "Dr. Ibarra," your section number, and your usual professional tone.',status:'review',created_at:new Date(Date.now()-3600000).toISOString()}],ranked:[{id:1,title:'Matrix transformations set',due_date:plus(1),course_name:'Linear Algebra',days_left:1,reason:'Due tomorrow in Linear Algebra.'},{id:2,title:'Linked list lab',due_date:plus(3),course_name:'Computer Science II',days_left:3,reason:'Due in 3 days.'}],gpa:{overall:3.54,courses:[{course:'Linear Algebra',letter:'A-',known_weight:30,assumed_weight:70},{course:'Computer Science II',letter:'B+',known_weight:45,assumed_weight:55}]}};
-  return {getState:async()=>data,updateTask:async()=>{},updateTaskStep:async()=>{},updateAssignment:async(id)=>{data.assignments=data.assignments.filter((a)=>a.id!==id);data.ranked=data.ranked.filter((r)=>r.id!==id);},addTask:async(task)=>{task.id=Date.now();task.course_name='General';task.done=0;task.steps=[1,2,3,4,5].map((id,index)=>({id:Date.now()+id,title:['Define what done looks like','Prepare the materials','Complete the first pass','Resolve the main blocker','Review and close'][index],done:0,estimated_minutes:12}));data.tasks.unshift(task);},setPreference:async(key,value)=>{data.preferences[key]=value;},importSource:async()=>({canceled:false,imported:4,fileName:'semester.ics'}),aiStatus:async()=>({cli:true,apiKey:false,encryptionAvailable:true}),aiSetKey:async()=>({ok:true}),aiClearKey:async()=>({ok:true}),aiTest:async()=>({ok:true}),syllabusImport:async()=>({sourceId:1,fileName:'COSC 1437 Syllabus.pdf',data:{course:{name:'Computer Science II',code:'COSC 1437',credit_hours:4,term:'Fall 2026'},grade_weights:[{category:'Homework',weight_pct:20},{category:'Labs',weight_pct:20},{category:'Midterm',weight_pct:25},{category:'Final',weight_pct:35}],assignments:[{title:'Linked list lab',due_date:plus(6),category:'Labs'},{title:'Homework 1: recursion',due_date:plus(9),category:'Homework'},{title:'Midterm exam',due_date:plus(30),category:'Midterm'}]}}),syllabusExtract:async()=>({error:'source_missing'}),syllabusConfirm:async()=>({ok:true,courseId:3,assignments:3,weights:4}),authConfig:async()=>({supabase:false,googleCalendar:false,outlook:true}),outlookStatus:async()=>({configured:true,connected:true,email:'you@utdallas.edu'}),outlookInbox:async()=>({messages:[{subject:'Assignment 3 deadline moved to Friday',from_name:'Dr. Lina Ibarra',from_address:'ibarra@utdallas.edu',received_at:new Date(Date.now()-3600000).toISOString(),preview:'Canvas will update tonight. The new deadline is Friday at 11:59pm.',unread:true,important:false},{subject:'Fall internship fair registration opens',from_name:'UTD Career Center',from_address:'careers@utdallas.edu',received_at:new Date(Date.now()-7200000).toISOString(),preview:'Registration opens this week for the fall fair.',unread:false,important:false}]}),styleProfile:async()=>({ready:true,exemplars:38,formality:'balanced',avgSentenceWords:16}),listActivity:async()=>data.activity,assistantParse:async(text)=>{const isQ=/\?|what|how|when|should/i.test(text);return isQ?{proposal:{command:{intent:'question',question:text,summary_for_user:''},resolved:{},notes:[],needs_confirm:false}}:{proposal:{command:{intent:'add_task',title:text.slice(0,60),due_date:plus(1),summary_for_user:`Create task "${text.slice(0,40)}" due tomorrow.`,confidence:0.9},resolved:{},notes:[],needs_confirm:true}};},assistantExecute:async()=>({ok:true,message:'Done (preview).'}),authSession:async()=>({user:null,configured:false}),syncStatus:async()=>({configured:false,authenticated:false,enabled:false}),addAutomation:async(item)=>{data.automations.unshift({...item,id:Date.now(),enabled:1,run_count:0});},updateAutomation:async()=>{},bridgeStatus:async()=>({connected:true,updated_at:new Date().toISOString()}),storageStatus:async()=>({dbBytes:4823040,sourceBytes:2411520,capBytes:536870912}),saveState:async()=>({ok:true,kind:null,message:null,failedSince:null}),onSaveState:()=>{},sourceText:async()=>'Professor: Dr. Lina Ibarra, ibarra@utdallas.edu',
+  return {getState:async()=>data,updateTask:async()=>{},updateTaskStep:async()=>{},updateAssignment:async(id)=>{data.assignments=data.assignments.filter((a)=>a.id!==id);data.ranked=data.ranked.filter((r)=>r.id!==id);},addTask:async(task)=>{task.id=Date.now();task.course_name='General';task.done=0;task.steps=[1,2,3,4,5].map((id,index)=>({id:Date.now()+id,title:['Define what done looks like','Prepare the materials','Complete the first pass','Resolve the main blocker','Review and close'][index],done:0,estimated_minutes:12}));data.tasks.unshift(task);},setPreference:async(key,value)=>{data.preferences[key]=value;},importSource:async()=>({canceled:false,imported:4,fileName:'semester.ics'}),aiStatus:async()=>({ok:true,reachable:true,baseUrl:'http://127.0.0.1:1234/v1',config:{baseUrl:'http://127.0.0.1:1234/v1',chatModel:'',visionModel:'',timeoutSec:300,maxImageSide:1280,contextLength:0},models:[{id:'google/gemma-4-12b',state:'loaded',vision:true},{id:'openai/gpt-oss-20b',state:'not-loaded',vision:false}],chat:{id:'google/gemma-4-12b',contextLength:16384},vision:{id:'google/gemma-4-12b',same:true},warnings:[]}),aiSetConfig:async()=>({ok:true}),aiTest:async()=>({ok:true,model:'google/gemma-4-12b',ms:1400}),aiTestVision:async()=>({ok:true,model:'google/gemma-4-12b',ms:3100}),syllabusImport:async()=>({sourceId:1,fileName:'COSC 1437 Syllabus.pdf',data:{course:{name:'Computer Science II',code:'COSC 1437',credit_hours:4,term:'Fall 2026'},grade_weights:[{category:'Homework',weight_pct:20},{category:'Labs',weight_pct:20},{category:'Midterm',weight_pct:25},{category:'Final',weight_pct:35}],assignments:[{title:'Linked list lab',due_date:plus(6),category:'Labs'},{title:'Homework 1: recursion',due_date:plus(9),category:'Homework'},{title:'Midterm exam',due_date:plus(30),category:'Midterm'}]}}),syllabusExtract:async()=>({error:'source_missing'}),syllabusConfirm:async()=>({ok:true,courseId:3,assignments:3,weights:4}),authConfig:async()=>({supabase:false,googleCalendar:false,outlook:true}),outlookStatus:async()=>({configured:true,connected:true,email:'you@utdallas.edu'}),outlookInbox:async()=>({messages:[{subject:'Assignment 3 deadline moved to Friday',from_name:'Dr. Lina Ibarra',from_address:'ibarra@utdallas.edu',received_at:new Date(Date.now()-3600000).toISOString(),preview:'Canvas will update tonight. The new deadline is Friday at 11:59pm.',unread:true,important:false},{subject:'Fall internship fair registration opens',from_name:'UTD Career Center',from_address:'careers@utdallas.edu',received_at:new Date(Date.now()-7200000).toISOString(),preview:'Registration opens this week for the fall fair.',unread:false,important:false}]}),styleProfile:async()=>({ready:true,exemplars:38,formality:'balanced',avgSentenceWords:16}),listActivity:async()=>data.activity,assistantParse:async(text)=>{const isQ=/\?|what|how|when|should/i.test(text);return isQ?{proposal:{command:{intent:'question',question:text,summary_for_user:''},resolved:{},notes:[],needs_confirm:false}}:{proposal:{command:{intent:'add_task',title:text.slice(0,60),due_date:plus(1),summary_for_user:`Create task "${text.slice(0,40)}" due tomorrow.`,confidence:0.9},resolved:{},notes:[],needs_confirm:true}};},assistantExecute:async()=>({ok:true,message:'Done (preview).'}),authSession:async()=>({user:null,configured:false}),syncStatus:async()=>({configured:false,authenticated:false,enabled:false}),addAutomation:async(item)=>{data.automations.unshift({...item,id:Date.now(),enabled:1,run_count:0});},updateAutomation:async()=>{},bridgeStatus:async()=>({connected:true,updated_at:new Date().toISOString()}),storageStatus:async()=>({dbBytes:4823040,sourceBytes:2411520,capBytes:536870912}),saveState:async()=>({ok:true,kind:null,message:null,failedSince:null}),onSaveState:()=>{},sourceText:async()=>'Professor: Dr. Lina Ibarra, ibarra@utdallas.edu',
     companionStatus:async()=>({running:true,visible:true,capturing:false,stealth:false}),
     companionControl:async(action)=>({running:true,visible:action!=='hide',capturing:action==='capture-start',stealth:false}),
     companionSessions:async()=>([{id:1,started_at:new Date(Date.now()-5400000).toISOString(),ended_at:new Date(Date.now()-3600000).toISOString(),pack:'demo-brief',title:'Pricing objection walkthrough',message_count:6,first_line:'Pricing objection walkthrough'}]),

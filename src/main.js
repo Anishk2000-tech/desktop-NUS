@@ -10,7 +10,7 @@ const { open, api, setSaveStateListener } = require('./db');
 const logic = require('./logic');
 const { decomposeTask, nextScheduledAt, parseIcs } = require('./smart');
 const secrets = require('./secrets');
-const config = require('./config');
+const config = require('./app-config');
 const auth = require('./auth');
 const sync = require('./sync');
 const gcal = require('./gcal');
@@ -25,7 +25,7 @@ const { initAutoUpdate } = require('./updater');
 const acquisition = require('./acquisition');
 const { installCrashHandlers } = require('./crash');
 const { createQuitGuard } = require('./quit-guard');
-const { createLicense } = require('./license');
+const { createLicense, createLocalLicense } = require('./license');
 const { createLimits } = require('./limits');
 const { createStats } = require('./stats');
 const companionApp = require('../companion');
@@ -258,7 +258,7 @@ function trackAsk(mode) {
 // What the renderer needs for the switch and the source question. The install
 // id itself stays in the main process; the renderer has no use for it.
 function statsSnapshot() {
-  if (!stats) return { enabled: true, active: false, envDisabled: true, askSource: false };
+  if (!stats) return { enabled: false, active: false, envDisabled: true, askSource: false, localEdition: Boolean(config.LOCAL_EDITION) };
   const { enabled, active, envDisabled, askSource } = stats.status();
   return { enabled, active, envDisabled, askSource };
 }
@@ -586,7 +586,7 @@ function studentSummary() {
   const courses = api.listCourses();
   const ranked = rankedToday();
   const openTasks = api.listTasks().filter((t) => !t.done).length;
-  return `Today: ${new Date().toISOString().slice(0, 10)}. Courses: ${courses.map((c) => c.name + (c.code ? ` (${c.code})` : '')).join('; ') || 'none'}. Next deadlines: ${ranked.slice(0, 5).map((r) => `${r.title} due ${r.due_date} (${r.course_name})`).join('; ') || 'none'}. Open tasks: ${openTasks}.`;
+  return `Today: ${assistant.localDate()}. Courses: ${courses.map((c) => c.name + (c.code ? ` (${c.code})` : '')).join('; ') || 'none'}. Next deadlines: ${ranked.slice(0, 5).map((r) => `${r.title} due ${r.due_date} (${r.course_name})`).join('; ') || 'none'}. Open tasks: ${openTasks}.`;
 }
 
 // Chat needs more than the one-line command summary: buckets that separate
@@ -601,7 +601,7 @@ function chatContext() {
   const tasks = api.listTasks().filter((t) => !t.done);
   const line = (r) => `${r.title} (${r.course_name || 'no course'}, due ${r.due_date})`;
   return [
-    `Today: ${new Date().toISOString().slice(0, 10)}.`,
+    `Today: ${assistant.localDate()} (${new Date().toLocaleDateString('en-US', { weekday: 'long' })}).`,
     `Courses: ${courses.map((c) => c.name + (c.code ? ` (${c.code})` : '')).join('; ') || 'none'}.`,
     `Due today: ${dueToday.map(line).join('; ') || 'nothing'}.`,
     `Due in the next 7 days: ${week.slice(0, 8).map(line).join('; ') || 'nothing'}.`,
@@ -721,7 +721,9 @@ app.whenReady().then(async () => {
   if (auth.isConfigured()) {
     try { await auth.restoreSession(); } catch (e) { console.error('[nus] session restore failed', e); }
   }
-  licenseManager = createLicense({
+  // Local Edition: no account and no billing, so every Free cap is lifted.
+  // The limits module still runs; it is what keeps the storage guard.
+  licenseManager = config.LOCAL_EDITION ? createLocalLicense() : createLicense({
     auth,
     config,
     // Offline Pro grace is encrypted with the OS account. It is deliberately
@@ -737,7 +739,9 @@ app.whenReady().then(async () => {
   // unpackaged dev runs unless NUS_STATS=1, never in smoke runs. The enabled
   // flag and the once-only bookkeeping live in the preferences table; the
   // install id is <userData>/install_id.txt.
-  stats = createStats({
+  // Local Edition sends nothing anywhere: no stats object, so every
+  // trackEvent() below is a no-op.
+  stats = config.LOCAL_EDITION ? null : createStats({
     userData: app.getPath('userData'),
     config,
     appVersion: app.getVersion(),
@@ -751,7 +755,7 @@ app.whenReady().then(async () => {
   await refreshLicense();
   // `install` on the first run ever, `app_open` now and once per calendar day
   // while the tray keeps the app alive.
-  stats.start(withAcquisitionDims('app_open', {}));
+  if (stats) stats.start(withAcquisitionDims('app_open', {}));
   writeBridge();
   await refreshGcalCache();
   gcalPollTimer = setInterval(refreshGcalCache, 600000);
@@ -779,7 +783,9 @@ app.whenReady().then(async () => {
 
   // Checks GitHub releases, downloads in the background, installs on next quit.
   // No-ops in dev and for the portable build. Never throws into boot.
-  if (!SMOKE) initAutoUpdate();
+  // Off in Local Edition: the feed is upstream's, and an "update" from it
+  // would replace this LM Studio build with the cloud one.
+  if (!SMOKE && !config.LOCAL_EDITION) initAutoUpdate();
 
   companion = companionApp.initCompanion({
     captureAllowanceMs: () => usageLimits.companionAllowanceMs(),
@@ -799,8 +805,6 @@ app.whenReady().then(async () => {
     // A question or voice command the Knot answered: first_ask once, then
     // ask with its mode (voice, text, guide). Counts only, never the words.
     onAsk: (mode) => trackAsk(mode),
-    // The Companion saved its own provider key (from the overlay's gear).
-    onKeyConnected: (provider) => { trackEvent('key_connected', { provider: String(provider || '').slice(0, 20) }); },
     onSessionStart: (meta) => {
       const settings = require('../companion/src/store').getSettings();
       if (settings.persistTranscripts === false) return null;
@@ -825,10 +829,6 @@ app.whenReady().then(async () => {
     },
     onStateChange: (status) => sendToDesktop('companion:state', status),
     onOutboxEvent: () => { try { ingestCompanionEvents(); } catch (e) { console.error('[nus] live ingest failed', e); } },
-    // The desktop's own AI (Claude Code if installed, else the Anthropic key)
-    // as the Companion's fallback for guide pointing when it has no key of
-    // its own. One prompt in, text out; the CLI can read an image file.
-    desktopComplete: (prompt, imageDataUrl) => ai.complete(prompt, { guidance: true, imageDataUrl }),
     audioRoot: () => path.join(app.getPath('userData'), 'companion', 'audio'),
     showDesktop: showDesktopWindow,
     showVoiceSetup: () => { showDesktopWindow(); if (win.webContents.isLoading()) win.webContents.once('did-finish-load', () => sendToDesktop('desktop:voice-setup', {})); else sendToDesktop('desktop:voice-setup', {}); },
@@ -971,8 +971,7 @@ async function prepareChatTurn(messages, opts) {
     if (parsed.error === 'target_not_found' && cmd) {
       return { response: { text: `I could not find "${cmd.target_title || cmd.title || 'that item'}" in your semester. What is its exact name?` } };
     }
-    const PROVIDER_ERRORS = ['no_ai', 'cli_timeout', 'cli_failed', 'cli_not_logged_in', 'cli_spawn_failed', 'api_failed', 'api_refused', 'api_timeout', 'api_network'];
-    if (parsed.error && PROVIDER_ERRORS.includes(parsed.error)) { questionTicket.rollback(); return { response: parsed }; }
+    if (parsed.error && ai.isProviderError(parsed.error)) { questionTicket.rollback(); return { response: parsed }; }
     if (parsed.proposal && parsed.proposal.needs_confirm && parsed.proposal.command.confidence >= 0.5) {
       const notes = (parsed.proposal.notes || []).join(' ');
       const matched = parsed.proposal.resolved.target ? `\nMatched: "${parsed.proposal.resolved.target.title}".` : '';
@@ -1175,14 +1174,12 @@ const handlers = {
     if (!result.error) await refreshGcalCache();
     return result;
   },
+  // Local AI (LM Studio). Status lists the server's models; set-config saves
+  // the server address and model choice for the desktop and the Companion.
   'ai:status': async () => ai.status(),
-  'ai:set-key': (_event, value) => {
-    const result = ai.setApiKey(value);
-    if (result && result.ok) trackEvent('key_connected', { provider: 'anthropic' });
-    return result;
-  },
-  'ai:clear-key': () => ai.clearApiKey(),
+  'ai:set-config': (_event, patch) => ai.setConfig(patch && typeof patch === 'object' ? patch : {}),
   'ai:test': async () => ai.testConnection(),
+  'ai:test-vision': async () => ai.testVision(),
   'syllabus:import': async (_event, filePath) => {
     const allowed = usageLimits.syllabusAllowed(null);
     if (!allowed.ok) return denied(allowed);
@@ -1206,7 +1203,7 @@ const handlers = {
     const ticket = usageLimits.reserveQuestion();
     if (!ticket.ok) return denied(ticket);
     const result = await assistantParse(text);
-    if (['no_ai', 'cli_timeout', 'cli_failed', 'cli_not_logged_in', 'cli_spawn_failed', 'api_failed', 'api_refused', 'api_timeout', 'api_network'].includes(result?.error)) ticket.rollback();
+    if (ai.isProviderError(result?.error)) ticket.rollback();
     // A plain question continues into chat:send, which counts it; only a
     // proposal that ends the turn here is counted here, so one ask is one row.
     else if (result?.proposal?.needs_confirm) trackAsk('text');
@@ -1273,27 +1270,6 @@ const handlers = {
     }
   },
   'companion:status:desktop': () => (companion ? companion.status() : { running: false }),
-  // The Companion's own provider key, settable from the desktop app so nobody
-  // has to find the overlay's gear icon to get the overlay working.
-  'companion:ai:status': () => {
-    const s = require('../companion/src/store').getSettings();
-    return { provider: s.provider, keys: Object.fromEntries(['gemini', 'openai', 'anthropic', 'nvidia'].map((p) => [p, Boolean(s.apiKeys && s.apiKeys[p])])) };
-  },
-  'companion:ai:set-key': (_event, payload) => {
-    const companionStore = require('../companion/src/store');
-    const provider = ['gemini', 'openai', 'anthropic', 'nvidia'].includes(payload?.provider) ? payload.provider : 'gemini';
-    const key = String(payload?.key || '').trim();
-    if (!key) return { error: 'empty_key' };
-    companionStore.setSettings({ apiKeys: { [provider]: key }, provider });
-    trackEvent('key_connected', { provider });
-    return { ok: true, provider };
-  },
-  'companion:ai:clear-key': (_event, provider) => {
-    const companionStore = require('../companion/src/store');
-    const name = ['gemini', 'openai', 'anthropic', 'nvidia'].includes(provider) ? provider : 'gemini';
-    companionStore.setSettings({ apiKeys: { [name]: '' } });
-    return { ok: true };
-  },
   'companion:sessions': () => api.listCompanionSessions().filter((row) => historyAllows(row.started_at)),
   'companion:messages': (_event, sessionId) => {
     const session = api.listCompanionSessions().find((row) => row.id === Number(sessionId));

@@ -39,7 +39,7 @@ function harness(replies, opts = {}) {
   const g = new GuideSession({
     capture: async () => CAP,
     probe,
-    llm: () => ({ ready: opts.ready !== false, provider: 'gemini', async complete() { const r = replies.shift(); if (r instanceof Error) throw r; return typeof r === 'string' ? r : JSON.stringify(r); } }),
+    llm: () => ({ ready: opts.ready !== false, provider: 'lmstudio', async complete() { const r = replies.shift(); if (r instanceof Error) throw r; return typeof r === 'string' ? r : JSON.stringify(r); } }),
     send: (ch, p) => sent.push([ch, p]),
     screenToDip: (p) => p,
     dipToScreen: (p) => p,
@@ -179,7 +179,7 @@ test('an unchanged screen after a click repeats the step once, then says so', as
 test('no key, a dead model, and a busy session all explain instead of hanging', async () => {
   const noKey = harness([], { ready: false });
   await noKey.g.start('x', 'typed');
-  assert.match(last(noKey.sent, 'guide:bubble').text, /Add your gemini key/);
+  assert.match(last(noKey.sent, 'guide:bubble').text, /Start LM Studio and load a vision model/);
   noKey.g.dismiss('test');
 
   const dead = harness([new Error('ECONNRESET')]);

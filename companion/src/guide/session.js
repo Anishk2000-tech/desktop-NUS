@@ -14,15 +14,17 @@
 //   winBounds()                -> overlay window bounds (DIPs)
 //   hashCapture(cap, physRect) -> { whole, crop } bitmap hashes
 //   walkthroughs               -> createWalkthroughs(): find/record/miss (or null)
-//   selfPid, log, sleep, now, onKeep(record)
+//   selfPid, log, sleep, now, onKeep(record), modelTimeoutMs()
 'use strict';
 
-const { buildPointRequest, parsePointReply, validatePoint, CONF_SURE } = require('./pointing');
+const { buildPointRequest, parsePointReply, validatePoint, CONF_SURE, POINT_SCHEMA } = require('./pointing');
 const { normRectFromPhys, physRectFromNorm, physRectToWindow, reconcile, screenChanged, clickHits } = require('./verify');
 const { sensitiveTarget } = require('./sensitive');
 
 const MAX_STEPS = 12;
-const MODEL_TIMEOUT_MS = 75000;   // Claude Code cold start + an image read can take a while
+// A local 12B model split between a small GPU and RAM can need a minute or
+// more to read the control list and a screenshot. modelTimeoutMs() overrides.
+const MODEL_TIMEOUT_MS = 300000;
 const SETTLE_MS = 450;          // let the app react to a click before re-reading
 const EXPLAIN_MS = 10000;       // an explanation bubble goes away on its own
 const VK_ESCAPE = 27;
@@ -245,16 +247,17 @@ class GuideSession {
 
     // The model.
     const llm = this.d.llm();
-    if (!llm || !llm.ready) { this.explain('Add your ' + (llm && llm.provider ? llm.provider : 'AI') + ' key in Settings (the gear in the sheet) and I can guide you.'); return; }
+    if (!llm || !llm.ready) { this.explain('Start LM Studio and load a vision model (Gemma 4), then ask again.'); return; }
     const req = buildPointRequest({ task: s.task, history: s.steps, window: s.app || { title: '(no app in front)', process: '' }, elements, hint: hint || null });
     let raw = null;
     const t0 = this.d.now();
     try {
-      raw = await withTimeout(llm.complete({ system: req.system, turns: [{ role: 'user', text: req.text }], imageDataUrl: cap.dataUrl, json: true, maxTokens: 400 }), MODEL_TIMEOUT_MS, 'model');
+      const limit = (typeof this.d.modelTimeoutMs === 'function' && Number(this.d.modelTimeoutMs())) || MODEL_TIMEOUT_MS;
+      raw = await withTimeout(llm.complete({ system: req.system, turns: [{ role: 'user', text: req.text }], imageDataUrl: cap.dataUrl, json: true, schema: POINT_SCHEMA, schemaName: 'point', maxTokens: 400 }), limit, 'model');
     } catch (e) {
       this.d.log('model failed: ' + e.message);
       if (gen !== this.gen) return;
-      this.explain('I could not reach the model (' + (e.message || 'error').slice(0, 80) + ').');
+      this.explain(e && e.code ? e.message : 'I could not reach the model (' + (e.message || 'error').slice(0, 80) + ').');
       return;
     }
     if (gen !== this.gen) return;

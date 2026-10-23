@@ -1,0 +1,89 @@
+# Builds Nūs Local Edition for Windows on a clean GitHub runner and proves it:
+# tests, the setup script parses under Windows PowerShell 5.1 (what Windows 10
+# ships), the installer builds with the local speech engine inside, installs
+# silently, and the installed app boots (--smoke).
+#
+# Download: Actions tab > build-windows > the latest run > Artifacts >
+# "Nus-Local-Windows" (a zip with Nus-Setup.exe and Nus-Portable.exe).
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['main', 'master', 'claude/**']
+    paths-ignore: ['**/*.md', 'docs/**']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # Unsigned build: never go looking for a certificate.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Test
+        run: npm test
+
+      - name: The setup script parses under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\windows\setup.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | Format-List | Out-String | Write-Host; throw 'setup.ps1 has syntax errors' }
+          Write-Host 'setup.ps1 parses cleanly'
+
+      - name: Bundle the local speech engine (whisper.cpp)
+        run: npm run setup:voice
+
+      - name: Build the installer and the portable exe
+        run: node node_modules/electron-builder/cli.js --win --config electron-builder.config.js --publish never
+
+      - name: Scan the packed app
+        run: node scripts/package-security-check.js dist/win-unpacked/resources/app.asar
+
+      - name: Install silently and boot the installed app
+        shell: powershell
+        run: |
+          $p = Start-Process -FilePath dist\Nus-Setup.exe -ArgumentList '/S' -Wait -PassThru
+          Write-Host "installer exit code $($p.ExitCode)"
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Nus\Nus.exe'
+          if (-not (Test-Path $exe)) { Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Recurse -Depth 1 | Select-Object FullName | Out-String | Write-Host; throw "Nus.exe not installed at $exe" }
+          $whisper = Join-Path $env:LOCALAPPDATA 'Programs\Nus\resources\whisper'
+          if (-not ((Test-Path "$whisper\whisper-cli.exe") -or (Test-Path "$whisper\main.exe"))) { throw 'the installed app has no whisper.cpp binary' }
+          # Let the post-install launch settle, then close it so --smoke owns the single-instance lock.
+          Start-Sleep -Seconds 8
+          Get-Process Nus -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $env:NUS_SMOKE_DATA_DIR = Join-Path $env:RUNNER_TEMP 'nus-smoke'
+          $env:NUS_NO_PROTOCOL = '1'
+          $log = Join-Path $env:RUNNER_TEMP 'smoke.log'
+          $err = Join-Path $env:RUNNER_TEMP 'smoke.err'
+          $run = Start-Process -FilePath $exe -ArgumentList '--smoke' -RedirectStandardOutput $log -RedirectStandardError $err -Wait -PassThru
+          $out = (Get-Content $log -Raw) + (Get-Content $err -Raw)
+          Write-Host $out
+          if ($out -notmatch 'smoke ok') { throw "the installed app did not report smoke ok (exit $($run.ExitCode))" }
+
+      - name: List artifacts
+        run: Get-ChildItem dist -Filter *.exe | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nus-Local-Windows
+          path: |
+            dist/Nus-Setup.exe
+            dist/Nus-Portable.exe
+          if-no-files-found: error
+          retention-days: 30

@@ -159,10 +159,12 @@
       <div class="s-body">
         <div id="nus-link-status" class="nus-link-status">Checking Nūs desktop context…</div>
 
-        <label class="s-label">Gemini API key <span class="s-hint">free at aistudio.google.com/apikey · stored locally and encrypted</span></label>
-        <p class="s-note">Only needed for AI answers and listening: <b>"What should I do?" works with no key at all</b>, straight from your semester. One free Gemini key covers both answers and speech-to-text. Also settable in the desktop app under Settings, Companion AI key.</p>
-        <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-        <div class="s-field nus-share-field"><span>Smart answers <small>Off by default. On: every reply uses the slower, stronger model.</small></span><input id="smart-mode" type="checkbox" /></div>
+        <label class="s-label">Local AI · LM Studio <span class="s-hint">no keys, nothing leaves this PC</span></label>
+        <p class="s-note" id="local-status">Checking LM Studio…</p>
+        <div class="s-field"><span>Server</span><input id="local-url" type="text" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:1234/v1" /></div>
+        <div class="s-field"><span>Chat model</span><select id="local-chat"></select></div>
+        <div class="s-field"><span>Vision model</span><select id="local-vision"></select></div>
+        <div class="s-resume-actions"><span class="s-hint" id="local-result">Gemma 4 does both: chat and reading the screen.</span><span><button id="local-refresh" type="button">Refresh</button> <button id="local-test" type="button">Test</button></span></div>
 
         <label class="s-label">Ask shortcut <span class="s-hint">runs "What should I do?" from anywhere</span></label>
         <div class="s-shortcut">
@@ -173,24 +175,8 @@
         <div class="shortcut-hint" id="shortcut-hint">Click the shortcut, then press a new key combination.</div>
 
         <details class="s-more">
-          <summary>Use a different provider</summary>
-          <div class="s-seg" id="provider-seg">
-            <button data-provider="gemini">Gemini</button>
-            <button data-provider="openai">OpenAI</button>
-            <button data-provider="anthropic">Anthropic</button>
-            <button data-provider="nvidia">Nvidia</button>
-          </div>
-          <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-          <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-          <div class="s-field"><span>Nvidia</span><input id="key-nvidia" type="password" placeholder="nvapi-..." autocomplete="off" /></div>
-          <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
-          <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
-          <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
-        </details>
-
-        <details class="s-more">
           <summary>Privacy and sessions</summary>
-          <div class="s-field nus-share-field"><span>Let the Knot read your semester when answering with AI <small>Off by default. On: your courses, tasks, and deadlines ride along to your chosen AI provider so answers can reference them. Off: the "What should I do?" tile still works fully on this machine.</small></span><input id="share-nus-context" type="checkbox" /></div>
+          <div class="s-field nus-share-field"><span>Answer "What should I do?" with the local AI <small>Off by default: the tile answers instantly from your ranked semester, no model needed. On: LM Studio writes the answer from your courses, tasks and deadlines (slower, and it never leaves this PC).</small></span><input id="share-nus-context" type="checkbox" /></div>
           <div class="s-field nus-share-field"><span>Report answers back to the Nūs desktop brain <small>Off by default. Saves finished answers to a local file the Nūs desktop app reads. Stays on this machine.</small></span><input id="report-to-nus" type="checkbox" /></div>
           <div class="s-field nus-share-field"><span>Save transcripts to history <small>On by default. Every capture session lands in the desktop app, searchable and uploadable to your Jarvis vault from the Knot section.</small></span><input id="persist-transcripts" type="checkbox" /></div>
           <div class="s-field nus-share-field"><span>Keep session audio <small>Off by default. Retains voice-activated WAV audio per session for 30 days. Audio is the storage-heavy part.</small></span><input id="save-audio" type="checkbox" /></div>
@@ -208,7 +194,7 @@
 
         <details class="s-more" data-founder>
           <summary>Résumé</summary>
-          <label class="s-label" for="resume-context">Résumé / professional background <span class="s-hint">stored locally; sent to your selected provider with each request</span></label>
+          <label class="s-label" for="resume-context">Résumé / professional background <span class="s-hint">stored locally; added to every request to your local model</span></label>
           <textarea id="resume-context" class="s-textarea" maxlength="12000" placeholder="Paste your résumé or professional background here. Nūs will use it as the factual source for career-related answers."></textarea>
           <div class="s-resume-actions"><span class="s-hint">Maximum 12,000 characters</span><button id="clear-resume" type="button">Clear résumé</button></div>
         </details>

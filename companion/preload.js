@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld('nus', {
   captureState: () => ipcRenderer.invoke('companion:capture:state'),
   packStatus: () => ipcRenderer.invoke('companion:pack:status'),
   aiReady: () => ipcRenderer.invoke('companion:ai:ready'),
+  // LM Studio (Local Edition): server address, models, and the two tests.
+  localStatus: () => ipcRenderer.invoke('companion:local:status'),
+  localSet: (patch) => ipcRenderer.invoke('companion:local:set', patch),
+  localTest: () => ipcRenderer.invoke('companion:local:test'),
+  localTestVision: () => ipcRenderer.invoke('companion:local:test-vision'),
   desktopTour: () => ipcRenderer.invoke('companion:desktop:tour'),
   nusContextStatus: () => ipcRenderer.invoke('companion:nus-context:status'),
   sparReset: () => ipcRenderer.invoke('companion:spar:reset'),

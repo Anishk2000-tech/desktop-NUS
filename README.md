@@ -1,44 +1,44 @@
-# Nūs Desktop
+# Nūs Desktop: Local Edition
 
 The semester organizer that runs on your own AI, on your own machine. Import a
 real syllabus, see your whole semester as a living map, and let Nūs propose the
-next move. Nothing is saved without your review, and your coursework never
-leaves your computer except through the calls you configure below (see
-[Privacy](#privacy) for the anonymous usage stats and how to turn them off).
+next move. Nothing is saved without your review.
 
-## You bring the AI (required)
+**This edition runs only on LM Studio.** Every AI feature (syllabus reading, the
+Ask bar, chat, voice answers, and the Companion's screen help) goes to the model
+you load in [LM Studio](https://lmstudio.ai) on this PC. Speech is transcribed
+locally by whisper.cpp. There are no API keys, no account, no Free/Pro caps, no
+usage stats and no auto-update. Nothing leaves your computer except integrations
+you connect yourself.
 
-Nūs has no server and no bundled model. It needs two keys, and they do
-different jobs:
+**Windows setup, step by step: [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md).**
 
-**1. Claude, for the desktop app.** Reading syllabi, the Ask bar, and the chat
-thread all run on Anthropic's Claude, pinned to the mid-tier **Sonnet** model
-so a semester of use stays affordable.
-- If **Claude Code** is installed on your machine, Nūs finds it automatically
-  and uses your existing subscription. Nothing to paste.
-- Otherwise, get an **Anthropic API key** (console.anthropic.com) and paste it
-  in **Settings → AI provider**. It is encrypted on this device with your OS
-  keychain and only ever used to call Anthropic.
+## Your AI: LM Studio
 
-**2. Gemini, for the Companion overlay.** The floating Knot that watches your
-screen and listens in meetings runs on its own key so live answers stay fast
-and cheap. Get a free **Google Gemini** key (aistudio.google.com/apikey) and
-paste it in **Settings → Companion AI key**, or in the Knot's own gear icon.
-The Gemini key covers the Companion's answers. Speech to text needs no key at
-all: Nūs transcribes on your own machine with whisper.cpp (see **Voice** below)
-and only falls back to a Gemini or OpenAI key if the local engine is missing.
-(OpenAI, Anthropic, and Nvidia keys also work for answering.)
+1. In LM Studio, load **Gemma 4 12B** (it reads text *and* screenshots) with
+   **Context Length 16384**, and switch the server on (Developer tab, port 1234).
+2. In Nūs, open **Settings > Local AI** and press **Test chat** and **Test vision**.
 
-The first-run walkthrough points at both cards.
+Both models default to **Auto** (whatever LM Studio has loaded). You can split
+them, for example **GPT-OSS 20B** for chat with Gemma as the vision model. A
+screenshot always goes to the model that can see. Answers from reasoning models
+arrive without their thinking. The Knot's gear icon edits the same settings.
 
 ## Install and run
 
-Grab `Nus-Setup.exe` (installer) or `Nus-Portable.exe` (no install) on
-Windows, or `Nus-arm64.dmg` (Apple Silicon) / `Nus-x64.dmg` (Intel) on a Mac,
-from a release, or run from source:
+Download `Nus-Setup.exe` from this repository's **Actions > build-windows >
+Artifacts** (every push builds and test-installs it on a clean Windows runner),
+or build it yourself:
+
+```
+setup-windows.bat        (Windows: Node check, packages, voice engine, installer)
+```
+
+or by hand:
 
 ```
 npm install
+npm run setup:voice
 npm start
 ```
 
@@ -47,35 +47,15 @@ npm start
 `npm run setup:voice` downloads the local speech engine (whisper.cpp plus the
 base English model, about 65 MB, once) into `vendor/`. The installers bundle the
 engine and fetch the model on first use, so only source builds need this step.
+`node scripts/mock-lmstudio.js` starts a fake LM Studio with canned answers, so
+you can try Nūs without a model.
 
 ### Why Windows warns you about the download
 
-The installer is not code signed yet, so SmartScreen shows **"Windows
-protected your PC", Publisher: Unknown publisher** the first time you run
-`Nus-Setup.exe`. That is the absence of a certificate, not a detection. Click
-**More info**, then **Run anyway**. The build is reproducible from this repo,
-every release lists the SHA-512 of its artifacts in `latest.yml`, and Windows
-Defender scans it clean. Signing is wired and waiting on a certificate; see
-`docs/release.md`.
-
-### Why your Mac says it could not verify the app
-
-Same reason. The Mac build is not notarized yet, so the first open says
-**"Apple could not verify Nus is free of malware"**. Click **Done**, open
-**System Settings › Privacy & Security**, scroll to the Security section and
-press **Open Anyway** next to Nus, then confirm once. That is the only time
-it asks. The Mac build cannot update itself until it is notarized, so a new
-version means downloading the dmg again. Local voice (the on-device Whisper
-engine) is Windows-only for now; everything else is the same app.
-
-### Free and Pro
-
-Nūs Free runs a whole semester with honest caps: 3 AI syllabus imports, 10
-questions a day, 1 connected account, 1 automation rule, 20 Companion minutes
-a day with 7 days of history, 512 MB of storage. Pro ($9.99 a month) lifts
-them. Caps are counted locally; the plan itself is tied to your Nūs account
-(your account is an email and a plan, nothing else) and paid through Stripe
-Checkout. Card details never touch this app.
+The installer is not code signed, so SmartScreen shows **"Windows protected your
+PC", Publisher: Unknown publisher** the first time you run `Nus-Setup.exe`. That
+is the absence of a certificate, not a detection. Click **More info**, then
+**Run anyway**.
 
 ## What's inside
 
@@ -105,7 +85,9 @@ and comes back from the tray. **Turn off Companion** on the Knot pane removes
 it completely and releases the hotkeys until you turn it back on.
 
 Click the Knot and type what you need ("show me how to add a chart"), or hold
-the push-to-talk key and say it. The Knot reads the screen once, a strand runs
+the push-to-talk key (`Ctrl+Alt+Space`) and say it. Screen reading uses your LM
+Studio vision model (Gemma 4); screenshots are shrunk to 1280 px JPEG first,
+which keeps a step quick on a small GPU. The Knot reads the screen once, a strand runs
 to the one control to click, and a bubble at the tip says the step. Click it
 and the Knot re-reads the screen for the next step; Esc winds it back. When
 the task is done you can Keep the steps, and the same ask in the same app
@@ -130,17 +112,13 @@ every meeting, class, interview, or assessment you are in.
 
 ## Privacy
 
-Local-first by design. The database lives at `%APPDATA%\Nus\data\nus.db`
-(`~/Library/Application Support/Nus/data/nus.db` on a Mac) and
-everything Nūs knows stays on this device. The outbound calls are the AI
-providers you configured, the integrations you explicitly connect, and, if you
-sign in, the Supabase account check (email and plan, never content) plus Stripe
-when you buy Pro. There is no cloud sync of your coursework.
-
-Anonymous usage stats (which features get used, on a random install id) help
-us see what works. Your coursework and what you type stay on your device. Turn
-it off in Settings. The full list of what is sent, where the install id lives,
-and how to switch it off is in [docs/stats.md](docs/stats.md).
+Local-first, and in this edition local-only. The database lives at
+`%APPDATA%\Nus\data\nus.db` (`~/Library/Application Support/Nus/data/nus.db` on
+a Mac). Every AI request, screenshots included, goes to LM Studio on this PC;
+voice is transcribed on this PC. There is no account, no telemetry, no
+auto-update and no cloud sync. The only outbound calls are the integrations you
+explicitly connect (Google Calendar, Outlook) and the one-time voice model
+download.
 
 ## Stack
 
@@ -152,10 +130,10 @@ settings store, one runtime.
 
 MIT. See [LICENSE](LICENSE).
 
-The OAuth client IDs in `src/config.js` are gitignored but ship inside the
-installer, deliberately: Google documents desktop OAuth clients as public
-clients whose secret is not confidential, and Calendar and Outlook would not
-work for anyone without them. `src/shipped-secrets.test.js` is the tripwire
-that fails the build if a genuinely confidential credential ever lands in a
-packaged file. Bring your own credentials by creating that file locally;
-`docs/credentials-needed.md` walks through it.
+`src/config.js` is optional and gitignored: without it Nūs starts with every
+integration "not configured". To use Google Calendar or Outlook, create your own
+OAuth clients and put them there; `docs/credentials-needed.md` (sections 2 and 3)
+walks through it. `src/shipped-secrets.test.js` fails the build if a genuinely
+confidential credential ever lands in a packaged file.
+
+Based on Nūs Desktop by Pranav Desu (MIT).

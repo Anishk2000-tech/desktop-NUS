@@ -349,7 +349,9 @@ test('the words that had to change, changed', () => {
   assert.match(appJs, /Nūs sends anonymous usage stats \(which features get used, never your coursework or what you type\)\. Turn off in Settings\./);
   assert.match(html, /Send anonymous usage stats/);
   assert.match(html, /Anonymous usage stats \(which features get used, on a random install id\) help us see what works\. Your coursework and what you type stay on your device\./);
-  assert.match(readme, /Anonymous usage stats \(which features get used, on a random install id\) help\s+us see what works\. Your coursework and what you type stay on your device\. Turn\s+it off in Settings\./);
+  // Local Edition: the README promises no stats at all (src/main.js never creates them).
+  assert.match(readme, /no\s+usage stats/);
+  assert.match(readme, /There is no account, no telemetry/);
   for (const label of ['Instagram', 'A friend', 'Reddit', 'X', 'YouTube', 'Search', 'Other', 'Skip']) {
     assert.match(html, new RegExp(`data-source="[a-z]+">${label}<`), `source button ${label}`);
   }
@@ -367,9 +369,18 @@ test('the desktop wires stats through the preload and main like every other sett
   assert.match(preload, /statsSourceAnswer: \(source\) => ipcRenderer\.invoke\('stats:source-answer', source\)/);
   for (const channel of ['stats:status', 'stats:set-enabled', 'stats:source-answer']) assert.match(main, new RegExp(`'${channel}'`));
   assert.doesNotMatch(main, /licenseManager\.track\(/, 'nothing routes through the retired license.track');
-  assert.match(main, /stats\.start\(withAcquisitionDims\('app_open'/);
+  assert.match(main, /if \(stats\) stats\.start\(withAcquisitionDims\('app_open'/);
   assert.match(main, /acquisition\.hasFirstImport\(userData\)\) trackEvent\('import'/);
   assert.match(main, /trackEvent\('companion_session', \{ minutes:/);
-  assert.match(main, /trackEvent\('key_connected', \{ provider: 'anthropic' \}\)/);
   assert.match(read('companion/index.js'), /hooks\.onAsk\(mode\)/);
+});
+
+test('Local Edition sends no stats at all: no stats object, so every trackEvent is a no-op', () => {
+  const main = read('src/main.js');
+  assert.match(main, /stats = config\.LOCAL_EDITION \? null : createStats\(/);
+  assert.match(main, /function trackEvent\(name, props\) \{\n  if \(!stats\) return Promise\.resolve/);
+  assert.match(read('src/app-config.js'), /const LOCAL_EDITION = true;/);
+  // The switch and the first-run notice are not shown in this edition.
+  assert.match(read('renderer/index.html'), /<section class="setting-card" id="stats-card" hidden>/);
+  assert.match(read('renderer/app.js'), /if\(LOCAL_EDITION\|\|!api\.statsStatus\)return '';/);
 });

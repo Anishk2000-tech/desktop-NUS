@@ -28,7 +28,7 @@ const forbiddenPaths = entries.filter((entry) =>
   || /^(?:deno\.lock|AGENTS\.md)$/i.test(entry)
 );
 
-const required = ['src/license.js', 'src/limits.js', 'src/main.js', 'src/ipc-origin.js', 'src/guide-input.js', 'renderer/index.html', 'companion/index.js', 'companion/preload.js', 'companion/renderer/index.html', 'companion/renderer/knot3d.js', 'companion/renderer/knot-look.css', 'companion/renderer/strand.js', 'companion/src/guide/session.js', 'companion/src/guide/sensitive.js'];
+const required = ['src/license.js', 'src/limits.js', 'src/main.js', 'src/ipc-origin.js', 'src/local-llm.js', 'src/app-config.js', 'renderer/index.html', 'companion/index.js', 'companion/preload.js', 'companion/renderer/index.html', 'companion/renderer/knot3d.js', 'companion/renderer/knot-look.css', 'companion/renderer/strand.js', 'companion/src/guide/session.js', 'companion/src/guide/sensitive.js'];
 // 2026-09-16: the Quiet Knot modules (selected-assistance, inspection-input,
 // companion-context, quiet-knot.css) left with v0.2.6; knot-look.css replaced the sheet.
 required.push('src/transcription-queue.js');

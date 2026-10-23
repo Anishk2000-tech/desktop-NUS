@@ -12,6 +12,8 @@ const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { createLLM } = require('./src/llm');
+// The one LM Studio client and its settings (src/ai.js owns both).
+function localAi() { return require('../src/ai'); }
 const { MODES } = require('./src/prompts');
 const { appendResumeContext } = require('./src/profile-context');
 const { loadPack, appendPack, extractNumbers, extractCard } = require('./src/context-pack');
@@ -116,7 +118,7 @@ const APP_GUIDE = 'APP GUIDE (answer questions about Nus from this, not from the
   'Talking to Nus: a full chat thread lives in the desktop app under Knot > Companion. It answers questions and can create tasks, move due dates, and draft emails, each with a Confirm step before anything is written. The Ask bar on the Today tab takes one-shot requests from anywhere. ' +
   'Email has its own tab in the rail. Gmail needs no connection at all: open the Email tab, add the address you send from under "Gmail and your addresses", fill the professor email form, press "Draft email", then press "Open in Gmail" and the finished draft opens in a Gmail compose window signed in as that address, where the student presses send. Outlook is a separate optional connection and is read-only until they opt in to sending. ' +
   'Map = rail item 02 (drag the canvas, scroll to zoom). Syllabus import = the Import button, always reviewed before saving. My capture sessions = Knot > History, uploadable to the vault. Automations and Integrations = the Connections tab. ' +
-  'Keys, two of them and they are different: the DESKTOP app uses Claude, either Claude Code if it is installed or an Anthropic API key pasted in desktop Settings > AI provider. I, the Companion, use my OWN key, normally a free Google Gemini key from aistudio.google.com/apikey, pasted either in desktop Settings > "Companion AI key" (the card directly below the AI provider one) or through my gear icon in this command sheet. One Gemini key covers both my answers and speech-to-text for listening. The GPA scale for semester setup is in desktop Settings, the Data section. ' +
+  'AI: this is Nūs Local Edition. There are no API keys. Everything, the desktop app and me, runs on LM Studio on this PC (Developer tab, server Running, default address http://127.0.0.1:1234). Desktop Settings > Local AI picks the server address, the chat model and the vision model and has Test buttons; my gear icon has the same settings. Gemma 4 handles both chat and screenshots; a text-only model such as gpt-oss needs a vision model next to it for screen guidance. Listening and voice use whisper.cpp on this PC (desktop Today tab > mic > voice setup). The GPA scale for semester setup is in desktop Settings, the Data section. ' +
   `Hotkeys: ${HOTKEY_MOD}+Shift+Space hides or shows me, ${HOTKEY_MOD}+Shift+X stops listening and vanishes. I keep running after the dashboard closes and the hotkeys keep working. "Turn off Companion" on the Knot > Companion pane removes me completely and releases the hotkeys until turned back on there.`;
 
 // -------- window --------
@@ -252,7 +254,7 @@ async function flushChannel(channel) {
     const settings = store.getSettings();
     const stt = createSTT(settings);
     if (!stt.available) {
-      if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription available. Run voice setup in the desktop app (Today tab mic) for free local transcription, or add an OpenAI (Whisper) or Gemini key in Settings. Screen/LeetCode features work without it.' }); }
+      if (!sttDisabled) { sttDisabled = true; send('status', { message: 'Listening needs the local speech engine. Run voice setup in the desktop app (Today tab, the mic on the Knot). Screen features work without it.' }); }
       return;
     }
     const res = await stt.transcribe(pcm);
@@ -297,7 +299,7 @@ function handleSttError(err) {
   const noAccess = err.status === 403 || err.status === 401 || err.code === 'model_not_found';
   sttDisabled = true;
   if (noAccess) {
-    send('status', { message: 'Transcription off: your ' + err.provider + ' key has no access to a speech-to-text model (' + (err.status || err.code) + '). Screen features still work. To enable listening: give the key transcription access, or add a Gemini key in Settings and reopen.' });
+    send('status', { message: 'Transcription off (' + (err.status || err.code) + '). Re-run voice setup in the desktop app. Screen features still work.' });
   } else {
     send('status', { message: 'Transcription error (' + err.provider + '): ' + err.message });
   }
@@ -476,13 +478,13 @@ async function runFeature(mode, userText) {
     send('llm:start', { userBubble, small: !!def.small });
 
     if (!llm.ready) {
-      send('llm:error', { message: 'Add your ' + settings.provider + ' API key in Settings (gear icon) to start. Model: ' + (llm.model || 'unset') + '.' });
+      send('llm:error', { message: 'Start LM Studio and load a model, then try again.' });
       return;
     }
 
     let imageDataUrl = null;
     if (def.needsScreen) {
-      try { imageDataUrl = await captureScreenshot(); }
+      try { imageDataUrl = await captureScreenshot({ maxSide: localAi().getConfig().maxImageSide }); }
       catch (e) {
         send('status', { message: 'Screen capture needs permission. Grant Screen Recording to Nūs in System Settings.' });
       }
@@ -555,7 +557,8 @@ async function runFeature(mode, userText) {
     }
     send('llm:done', {});
   } catch (e) {
-    send('llm:error', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
+    // A LocalAIError already reads as a sentence that says what to do.
+    send('llm:error', { message: e && e.code ? e.message : 'Error: ' + (e && e.message ? e.message : String(e)) });
   } finally {
     state.busy = false;
     notifyDesktopState();
@@ -831,20 +834,19 @@ function registerIpc() {
   ipcMain.handle('companion:settings:get', () => ({ ...store.getSettings(), _migrationNote: store.migrationNote(), _founderTools: FOUNDER }));
   ipcMain.handle('companion:settings:set', (_e, patch) => {
     sttDisabled = false;
-    // A provider key that is new or changed counts as `key_connected` for the
-    // anonymous stats (provider name only, never the key).
-    const before = { ...(store.getSettings().apiKeys || {}) };
-    const result = store.setSettings(patch);
-    const keys = patch && patch.apiKeys && typeof patch.apiKeys === 'object' ? patch.apiKeys : null;
-    if (keys && hooks.onKeyConnected) {
-      for (const [provider, value] of Object.entries(keys)) {
-        if (typeof value === 'string' && value.trim() && value !== before[provider]) {
-          try { hooks.onKeyConnected(provider); } catch (_) { /* best-effort */ }
-        }
-      }
-    }
-    return result;
+    // LM Studio settings go through ai.setConfig, which validates them and
+    // drops the cached model list. Everything else is a plain merge.
+    const clean = patch && typeof patch === 'object' ? { ...patch } : {};
+    delete clean.local;
+    delete clean.apiKeys;
+    delete clean.models;
+    return store.setSettings(clean);
   });
+  // LM Studio, from the gear: the same calls the desktop Settings card makes.
+  ipcMain.handle('companion:local:status', () => localAi().status());
+  ipcMain.handle('companion:local:set', (_e, patch) => localAi().setConfig(patch && typeof patch === 'object' ? patch : {}));
+  ipcMain.handle('companion:local:test', () => localAi().testConnection());
+  ipcMain.handle('companion:local:test-vision', () => localAi().testVision());
   ipcMain.handle('companion:shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
   ipcMain.handle('companion:capture:toggle', () => setCapturing(!state.capturing));
   ipcMain.handle('companion:capture:state', () => ({ active: state.capturing }));
@@ -854,12 +856,10 @@ function registerIpc() {
     if (hooks.startDesktopTour) hooks.startDesktopTour();
     return { ok: true };
   });
-  ipcMain.handle('companion:ai:ready', () => {
-    const settings = store.getSettings();
-    const llm = createLLM(settings);
-    return llm.ready
-      ? { ok: true }
-      : { ok: false, message: 'Add your ' + settings.provider + ' API key in Settings (gear icon) to start. Model: ' + (llm.model || 'unset') + '.' };
+  // Ready means LM Studio answers and has a model; the message says how to fix it otherwise.
+  ipcMain.handle('companion:ai:ready', async () => {
+    const s = await localAi().status();
+    return s.ok ? { ok: true, model: s.chat && s.chat.id } : { ok: false, message: s.message };
   });
   ipcMain.handle('companion:nus-context:status', () => {
     const result = loadNusContext(NUS_CONTEXT_FILE);
@@ -989,39 +989,15 @@ function hashCapture(cap, physRect) {
   return { whole, crop };
 }
 
-// The Companion's own key when it has one; otherwise the desktop's Claude
-// (Claude Code on the subscription, or its API key) through
-// hooks.desktopComplete(prompt, imageDataUrl): the screenshot travels inline
-// over stdin, the CLI runs with no tools, one model turn (src/guide-input.js).
-// Measured 2026-09-15: Sonnet 5 answers a pointing step in one short JSON
-// reply; Haiku 4.5 padded it with prose and was 4x slower, so the desktop's
-// pinned model stays. A Gemini key in the Companion settings skips the CLI.
-// NUS_GUIDE_PROVIDER=claude ignores the Companion's own key and always guides
-// through the desktop's Claude (a flaky provider minutes before a take).
-const FORCE_CLAUDE_GUIDE = process.env.NUS_GUIDE_PROVIDER === 'claude';
-// Full-resolution capture: in apps with no UI Automation the model's box IS
-// the pointer, and a shrunk screenshot put it a toolbar icon off.
-const GUIDE_CAPTURE_MAXSIDE = Number(process.env.NUS_GUIDE_MAXSIDE) || 2560;
+// Guidance reads the screen with LM Studio's vision model (Gemma 4 sees).
+// The screenshot is shrunk to Settings > Local AI > image size: a local vision
+// model resizes to its own grid anyway, and on a 4 GB GPU a smaller frame is
+// the difference between seconds and a minute. NUS_GUIDE_MAXSIDE overrides.
+function guideMaxSide() {
+  return Number(process.env.NUS_GUIDE_MAXSIDE) || localAi().getConfig().maxImageSide;
+}
 function guideLlm() {
-  const own = createLLM(store.getSettings());
-  if (typeof hooks.desktopComplete !== 'function') return own;
-  if (own.ready && !FORCE_CLAUDE_GUIDE) return own;
-  return {
-    ready: true,
-    provider: 'claude (desktop)',
-    model: 'desktop',
-    async complete({ system, turns, imageDataUrl }) {
-      const ask = turns[turns.length - 1] ? turns[turns.length - 1].text : '';
-      const prompt = system + '\n\n' + ask + '\n\nReply with the JSON object only.';
-      const r = await hooks.desktopComplete(prompt, imageDataUrl || null);
-      if (!r || r.error) {
-        const code = r && r.error;
-        if (code === 'no_ai') throw new Error('no AI is set up. Paste a free Gemini key in the Companion settings, or sign in to Claude Code');
-        throw new Error(code + (r && r.detail ? ': ' + r.detail : ''));
-      }
-      return r.text || '';
-    },
-  };
+  return createLLM(store.getSettings());
 }
 
 let walkthroughs = null;
@@ -1034,11 +1010,15 @@ function getGuide() {
   if (guide) return guide;
   guide = new GuideSession({
     walkthroughs: getWalkthroughs(),
-    // Full-resolution capture: in apps with no UI Automation (CapCut, games)
-    // the model's bbox IS the pointer, so a shrunk screenshot put the box a
-    // toolbar-icon off. 2560 keeps a 1440p screen native. NUS_GUIDE_MAXSIDE
-    // overrides. (2026-09-15, Pranav: "why is it guestimating".)
-    capture: () => captureDisplay(store.getSettings().knotDisplayId, { maxSide: GUIDE_CAPTURE_MAXSIDE }),
+    // Upstream captured at 2560 px because a cloud model's bbox IS the
+    // pointer in apps with no UI Automation. A local vision model on a small
+    // GPU trades a little box precision for speed: Settings > Local AI >
+    // Screenshot size (1280 by default; raise it if boxes land off target).
+    capture: () => captureDisplay(store.getSettings().knotDisplayId, { maxSide: guideMaxSide() }),
+    // As long as the LM Studio client itself would wait (twice the silence
+    // limit while the prompt is read), plus a margin, so its clearer timeout
+    // message is the one the student sees.
+    modelTimeoutMs: () => localAi().getConfig().timeoutSec * 2000 + 30000,
     get probe() { return probe; },
     llm: () => guideLlm(),
     send,
@@ -1200,7 +1180,7 @@ async function pttStop(reason) {
   if (pcm.length < PTT_MIN_BYTES || rms16(pcm) < RMS_GATE) { flash('I did not catch that. Hold the key and speak.', 3000); restoreKnotState(); return; }
   const settings = store.getSettings();
   const stt = createSTT(settings);
-  if (!stt.available) { flash('No transcription yet. Run voice setup in the desktop app, or add a Gemini key.', 5000); restoreKnotState(); return; }
+  if (!stt.available) { flash('No local speech engine yet. Run voice setup in the desktop app (Today tab, the mic).', 5000); restoreKnotState(); return; }
   let res = null;
   const t0 = Date.now();
   try { res = await stt.transcribe(pcm); } catch (e) { res = { text: '', error: { message: e.message } }; }
@@ -1299,6 +1279,11 @@ function guideDismiss(reason) {
 // guide session. Day-1 native version (2026-09-15) of the selection feature
 // Pranav used in the main tree: no region picker, no second composer.
 let selection = null;
+const SELECT_SCHEMA = {
+  type: 'object',
+  properties: { answer: { type: 'string' }, walk: { type: 'boolean' } },
+  required: ['answer', 'walk'],
+};
 async function selectAtCursor() {
   if (!win || win.isDestroyed() || !win.isVisible()) return;
   if (state.busy) { send('status', { message: 'Still working on the last one.' }); return; }
@@ -1308,7 +1293,7 @@ async function selectAtCursor() {
   send('guide:state', { state: 'reading', task: 'ask' });
   const [hit, cap] = await Promise.all([
     controlUnderCursor(),
-    captureDisplay(store.getSettings().knotDisplayId, { maxSide: GUIDE_CAPTURE_MAXSIDE }).catch((e) => { console.log('[select] capture failed:', e.message); return null; }),
+    captureDisplay(store.getSettings().knotDisplayId, { maxSide: guideMaxSide() }).catch((e) => { console.log('[select] capture failed:', e.message); return null; }),
   ]);
   if (!win || win.isDestroyed()) return;
   const name = hit && hit.name ? String(hit.name) : '';
@@ -1345,7 +1330,7 @@ async function answerSelection(text) {
   if (!sel || !q) return;
   sel.question = q;
   const llm = guideLlm();
-  if (!llm || !llm.ready) { send('guide:bubble', { text: 'Add your AI key in Settings and I can answer.', anchor: 'tip', task: 'ask', actions: [{ id: 'dismiss', label: 'OK' }] }); return; }
+  if (!llm || !llm.ready) { send('guide:bubble', { text: 'Start LM Studio and load a vision model, then ask again.', anchor: 'tip', task: 'ask', actions: [{ id: 'dismiss', label: 'OK' }] }); return; }
   state.busy = true; notifyDesktopState();
   send('guide:state', { state: 'reading', task: 'ask' });
   const system = [
@@ -1361,11 +1346,11 @@ async function answerSelection(text) {
   let answer = '', walk = false;
   const t0 = Date.now();
   try {
-    const raw = await llm.complete({ system, turns: [{ role: 'user', text: ask }], imageDataUrl: sel.capture ? sel.capture.dataUrl : null, json: true, maxTokens: 400 });
+    const raw = await llm.complete({ system, turns: [{ role: 'user', text: ask }], imageDataUrl: sel.capture ? sel.capture.dataUrl : null, json: true, schema: SELECT_SCHEMA, schemaName: 'select', maxTokens: 400 });
     const parsed = parsePointReply(raw);
     answer = parsed && parsed.answer ? String(parsed.answer) : String(raw || '').trim();
     walk = !!(parsed && parsed.walk);
-  } catch (e) { answer = 'I could not reach the model (' + (e.message || 'error').slice(0, 80) + ').'; }
+  } catch (e) { answer = e && e.code ? e.message : 'I could not reach the model (' + (e.message || 'error').slice(0, 80) + ').'; }
   finally { state.busy = false; notifyDesktopState(); }
   console.log('[select] answered in ' + (Date.now() - t0) + 'ms' + (walk ? ' (walk suggested)' : ''));
   noteAsk('text');
@@ -1495,7 +1480,6 @@ function stopCursorProbe() {
 //   audioRoot() -> path                   folder for opt-in retained audio
 //   showDesktop()                         focus/reopen the desktop window
 //   onAsk(mode)                           an answered ask: 'voice' | 'text' | 'guide' (anonymous stats)
-//   onKeyConnected(provider)              the overlay saved a provider key (anonymous stats)
 function initCompanion(providedHooks = {}) {
   hooks = providedHooks;
 

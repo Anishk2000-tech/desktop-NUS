@@ -25,16 +25,20 @@ test('local STT spawns whisper with bare-transcript flags and no hardcoded user 
   assert.match(sttLocal, /windowsHide: true/);
 });
 
-test('streaming CLI runner keeps the subscription billing rule', () => {
-  // Both spawn paths must strip a stray API key so claude -p bills the
-  // subscription. One helper (cliEnv) does the delete; runCli and runCliStream
-  // must both spawn with it and neither may build its own env.
-  assert.match(aiJs, /function cliEnv\(\)[\s\S]*?delete env\.ANTHROPIC_API_KEY/, 'cliEnv must delete ANTHROPIC_API_KEY');
-  const usesHelper = aiJs.match(/env: cliEnv\(\), windowsHide: true/g) || [];
-  assert.ok(usesHelper.length >= 2, 'runCli AND runCliStream must spawn with cliEnv()');
-  const outsideHelper = aiJs.replace(/function cliEnv\(\)[\s\S]*?\n\}/, '');
-  assert.ok(!/\{ \.\.\.process\.env \}/.test(outsideHelper), 'no spawn path may build its own env');
-  assert.match(aiJs, /stream-json/);
+test('voice answers stream from LM Studio and can be cancelled mid-answer', () => {
+  // One AbortController per stream: talking over the Knot or closing voice
+  // stops the local model instead of letting it finish into the void.
+  assert.match(aiJs, /stream: true,\n      onToken: \(text\) => onEvent\(\{ type: 'delta', text \}\),\n      signal: ctrl\.signal,/);
+  assert.match(aiJs, /function cancelStream\(\) \{\n  if \(!streamAbort\) return \{ ok: false \};\n  streamAbort\.abort\(\);/);
+  assert.match(mainJs, /'voice:cancel': \(\) => ai\.cancelStream\(\)/);
+  // Thinking never reaches the transcript or the speaker.
+  assert.match(read('src', 'local-llm.js'), /delta\.reasoning \(gpt-oss\) and delta\.reasoning_content are the\n        \/\/ model thinking out loud: never shown, never spoken\./);
+});
+
+test('the Companion transcribes on this PC only: no cloud speech fallback', () => {
+  const stt = read('companion', 'src', 'stt.js');
+  assert.match(stt, /require\('\.\.\/\.\.\/src\/stt-local'\)/);
+  assert.doesNotMatch(stt, /openai|gemini|GoogleGenAI/i);
 });
 
 test('desktop window gets microphone only, never display-capture', () => {

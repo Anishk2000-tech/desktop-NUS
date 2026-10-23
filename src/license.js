@@ -133,3 +133,25 @@ function createLicense({ auth, config, cacheStore, fetchImpl = global.fetch, clo
 }
 
 module.exports = { createLicense, OFFLINE_GRACE_MS, isStripeUrl };
+
+// Nūs Local Edition: no account, no Stripe. The plan is "local" and every cap
+// is lifted (limits.js reads isPro). Checkout and portal have nowhere to go.
+function createLocalLicense() {
+  const state = Object.freeze({
+    plan: 'local',
+    status: 'active',
+    isPro: true,
+    source: 'local_edition',
+    checkedAt: null,
+    currentPeriodEnd: null,
+    cancelAtPeriodEnd: false,
+  });
+  return {
+    refresh: async () => ({ ...state }),
+    status: () => ({ ...state }),
+    createCheckout: async () => ({ error: 'local_edition' }),
+    createPortal: async () => ({ error: 'local_edition' }),
+  };
+}
+
+module.exports.createLocalLicense = createLocalLicense;

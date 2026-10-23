@@ -59,3 +59,25 @@ test('Pro bypasses feature caps but keeps a physical two-gigabyte safety cap', (
 test('day keys follow local calendar days', () => {
   assert.match(localDay(Date.parse('2026-08-21T12:00:00')), /^2026-08-21$/);
 });
+
+test('Local Edition lifts every cap: no account, no Stripe, nothing counted', async () => {
+  const { createLocalLicense } = require('./license');
+  const preferences = {};
+  const db = { getPreferences: () => ({ ...preferences }), setPreference: (key, value) => { preferences[key] = value; } };
+  const license = createLocalLicense();
+  const limits = createLimits({ db, license });
+  for (let id = 1; id <= 50; id++) { assert.equal(limits.syllabusAllowed(id).ok, true); limits.recordSyllabus(id); }
+  for (let i = 0; i < 100; i++) assert.equal(limits.reserveQuestion().ok, true);
+  assert.equal(limits.connectedAccountAllowed('outlook', { google_calendar: true }).ok, true);
+  assert.equal(limits.automationAllowed(25).ok, true);
+  assert.equal(limits.companionAllowanceMs(), Number.POSITIVE_INFINITY);
+  assert.equal(limits.historyCutoff(), null);
+  assert.deepEqual(preferences, {}, 'nothing is even counted');
+  assert.equal(license.status().plan, 'local');
+  assert.equal((await license.refresh()).isPro, true);
+  assert.equal((await license.createCheckout()).error, 'local_edition');
+  // main.js uses it whenever the edition flag is on.
+  const main = require('node:fs').readFileSync(require('node:path').join(__dirname, 'main.js'), 'utf8');
+  assert.match(main, /licenseManager = config\.LOCAL_EDITION \? createLocalLicense\(\) : createLicense\(/);
+  assert.match(main, /if \(!SMOKE && !config\.LOCAL_EDITION\) initAutoUpdate\(\);/, 'no auto-update from the upstream cloud build');
+});
