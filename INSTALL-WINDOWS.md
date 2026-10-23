@@ -57,8 +57,10 @@ build is tested there: it installs silently and the installed app boots.
    > download **Nus-Local-Windows** (a zip).
 2. Unzip it and run **`Nus-Setup.exe`**. Windows SmartScreen will say *"Windows
    protected your PC"* because the installer isn't code-signed. Click **More info**,
-   then **Run anyway**. It installs only for your user, so no admin rights are needed.
-   (`Nus-Portable.exe` runs without installing.)
+   then **Run anyway**. It installs only for your user (into
+   `%LOCALAPPDATA%\Programs\nus-desktop`), so no admin rights are needed, and adds
+   a **Nus** shortcut to the Desktop and Start menu. (`Nus-Portable.exe` runs
+   without installing.)
 3. You still need local voice? The installer includes whisper.cpp. Nūs downloads the
    57 MB speech model the first time you click the Knot to talk.
 
